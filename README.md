@@ -114,6 +114,32 @@ Please refer to our tutorial paper for more details.
 
 ---
 
+## 📚 Documentation
+
+This project includes comprehensive documentation for various use cases:
+
+### Quick Start
+- **[Get Started Guide](docs/GET_STARTED.md)** - 5-minute quick start guide
+- **[Data Center Quick Start](docs/REAL_DATA_QUICK_START.md)** - Quick start with real data
+
+### Core Documentation
+- **[Data Center Summary](docs/DATACENTER_SUMMARY.md)** - Data center HVAC optimization project overview
+- **[Architecture Guide](docs/ARCHITECTURE.md)** - System architecture details
+- **[Data Center Manual](docs/README_DATACENTER.md)** - Complete usage manual
+- **[Migration Guide](docs/MIGRATION_GUIDE.md)** - Migration from wireless network to data center
+
+### Real Data Integration
+- **[Integration Summary](docs/REAL_DATA_INTEGRATION_SUMMARY.md)** - Real data integration overview
+- **[Integration Guide](docs/REAL_DATA_INTEGRATION_GUIDE.md)** - Complete integration guide
+- **[Reliability Analysis](docs/DATA_RELIABILITY_ANALYSIS.md)** - Data reliability analysis
+
+### Project Management
+- **[Delivery Checklist](docs/DELIVERY_CHECKLIST.md)** - Project delivery checklist
+
+**📖 [View All Documentation](docs/README.md)**
+
+---
+
 ## Citation
 If our diffusion-based method can be used in your paper, please help cite:
 ```bibtex
