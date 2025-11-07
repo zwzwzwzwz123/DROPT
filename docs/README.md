@@ -35,14 +35,26 @@
 
 ---
 
-### 🔬 真实数据集成
+### 🔬 真实数据集成（已移除功能，文档仅供参考）
+
+> ⚠️ **注意**: 项目已简化，不再使用真实数据集成功能。以下文档仅作为历史参考保留。
+
+| 文档 | 说明 | 状态 |
+|------|------|------|
+| [REAL_DATA_INTEGRATION_SUMMARY.md](REAL_DATA_INTEGRATION_SUMMARY.md) | 真实数据集成方案总结 | 📚 参考 |
+| [REAL_DATA_INTEGRATION_GUIDE.md](REAL_DATA_INTEGRATION_GUIDE.md) | 真实数据集成完整指南 | 📚 参考 |
+| [REAL_DATA_QUICK_START.md](REAL_DATA_QUICK_START.md) | 真实数据快速开始 | 📚 参考 |
+| [DATA_RELIABILITY_ANALYSIS.md](DATA_RELIABILITY_ANALYSIS.md) | 数据可靠性深度分析 | 📚 参考 |
+
+---
+
+### 🔧 代码质量与优化
 
 | 文档 | 说明 | 适用场景 |
 |------|------|---------|
-| [REAL_DATA_INTEGRATION_SUMMARY.md](REAL_DATA_INTEGRATION_SUMMARY.md) | 真实数据集成方案总结 | 快速了解方案 |
-| [REAL_DATA_INTEGRATION_GUIDE.md](REAL_DATA_INTEGRATION_GUIDE.md) | 真实数据集成完整指南 | 详细技术实现 |
-| [REAL_DATA_QUICK_START.md](REAL_DATA_QUICK_START.md) | 真实数据快速开始 | 立即开始使用 |
-| [DATA_RELIABILITY_ANALYSIS.md](DATA_RELIABILITY_ANALYSIS.md) | 数据可靠性深度分析 | 研究与评估 |
+| [THERMAL_MODEL_REVIEW.md](THERMAL_MODEL_REVIEW.md) | 热力学模型代码审查报告 | 了解问题和改进点 |
+| [THERMAL_MODEL_OPTIMIZATION_SUMMARY.md](THERMAL_MODEL_OPTIMIZATION_SUMMARY.md) | 热力学模型优化总结 | 查看优化效果 |
+| [PROJECT_CLEANUP_REPORT.md](PROJECT_CLEANUP_REPORT.md) | 项目清理报告 | 了解项目简化过程 |
 
 ---
 

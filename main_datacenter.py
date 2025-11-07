@@ -48,19 +48,6 @@ def get_args():
     parser.add_argument('--violation-penalty', type=float, default=100.0,
                         help='温度越界惩罚 γ')
 
-    # ========== 真实数据参数 ==========
-    parser.add_argument('--real-data', type=str, default=None,
-                        help='真实数据文件路径（CSV格式）')
-    parser.add_argument('--real-data-ratio', type=float, default=0.3,
-                        help='真实数据使用比例（0-1）')
-    parser.add_argument('--real-data-ratio-schedule', type=str, default='fixed',
-                        choices=['fixed', 'progressive', 'staged'],
-                        help='真实数据比例调度策略')
-    parser.add_argument('--calibrated-params', type=str, default=None,
-                        help='校准后的模型参数文件（JSON格式）')
-    parser.add_argument('--data-augmentation', action='store_true',
-                        help='是否启用数据增强')
-    
     # ========== 专家控制器参数 ==========
     parser.add_argument('--expert-type', type=str, default='pid',
                         choices=['pid', 'mpc', 'rule_based'],
@@ -152,40 +139,6 @@ def main(args=None):
     print("数据中心空调优化 - 基于扩散模型的强化学习")
     print("=" * 70)
 
-    # ========== 加载真实数据（如果提供） ==========
-    real_data_loader = None
-    if args.real_data:
-        print("\n[0/6] 加载真实数据...")
-        from env.real_data_loader import RealDataLoader
-
-        real_data_loader = RealDataLoader(
-            data_file=args.real_data,
-            episode_length=args.episode_length,
-            num_crac=args.num_crac,
-            augmentation=args.data_augmentation
-        )
-
-        # 显示数据统计
-        stats = real_data_loader.get_statistics()
-        print(f"  ✓ 数据统计:")
-        print(f"    - 室内温度: {stats['T_indoor_mean']:.1f} ± {stats['T_indoor_std']:.1f}°C")
-        print(f"    - IT负载: {stats['IT_load_mean']:.1f} ± {stats['IT_load_std']:.1f}kW")
-        if 'PUE_mean' in stats:
-            print(f"    - PUE: {stats['PUE_mean']:.2f} ± {stats['PUE_std']:.2f}")
-
-    # ========== 加载校准参数（如果提供） ==========
-    calibrated_params = None
-    if args.calibrated_params:
-        print(f"\n加载校准参数: {args.calibrated_params}")
-        import json
-        with open(args.calibrated_params, 'r') as f:
-            calibrated_data = json.load(f)
-            calibrated_params = calibrated_data['parameters']
-
-        print(f"  ✓ 校准参数:")
-        for key, value in calibrated_params.items():
-            print(f"    - {key}: {value:.2f}")
-
     # ========== 创建数据中心环境 ==========
     print("\n[1/6] 创建数据中心环境...")
 
@@ -199,15 +152,6 @@ def main(args=None):
         'temp_weight': args.temp_weight,
         'violation_penalty': args.violation_penalty,
     }
-
-    # 添加校准参数
-    if calibrated_params:
-        env_kwargs.update({
-            'thermal_mass': calibrated_params.get('thermal_mass', 1206),
-            'wall_ua': calibrated_params.get('wall_ua', 50),
-            'cop_nominal': calibrated_params.get('cop_nominal', 3.0),
-            'crac_capacity': calibrated_params.get('crac_capacity', 100),
-        })
 
     env, train_envs, test_envs = make_datacenter_env(
         training_num=args.training_num,
