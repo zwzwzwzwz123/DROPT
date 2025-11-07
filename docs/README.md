@@ -54,7 +54,8 @@
 |------|------|---------|
 | [THERMAL_MODEL_REVIEW.md](THERMAL_MODEL_REVIEW.md) | 热力学模型代码审查报告 | 了解问题和改进点 |
 | [THERMAL_MODEL_OPTIMIZATION_SUMMARY.md](THERMAL_MODEL_OPTIMIZATION_SUMMARY.md) | 热力学模型优化总结 | 查看优化效果 |
-| [PROJECT_CLEANUP_REPORT.md](PROJECT_CLEANUP_REPORT.md) | 项目清理报告 | 了解项目简化过程 |
+| [PROJECT_CLEANUP_REPORT.md](PROJECT_CLEANUP_REPORT.md) | 第一轮清理报告（移除真实数据） | 了解项目简化过程 |
+| [WIRELESS_CODE_CLEANUP_REPORT.md](WIRELESS_CODE_CLEANUP_REPORT.md) | 第二轮清理报告（移除无线网络） | 了解项目演进历程 |
 
 ---
 
