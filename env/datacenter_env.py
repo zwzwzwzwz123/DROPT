@@ -5,8 +5,8 @@
 # 基于DROPT框架改造
 
 import numpy as np
-import gym
-from gym import spaces
+import gymnasium as gym
+from gymnasium import spaces
 from typing import Tuple, Dict, Any
 import pandas as pd
 from .thermal_model import ThermalModel
@@ -154,22 +154,31 @@ class DataCenterEnv(gym.Env):
         self.IT_load = 200.0         # IT负载
         self.T_supply = np.ones(num_crac_units) * 20.0  # 各CRAC供风温度
         
-    def reset(self) -> np.ndarray:
+    def reset(self, seed=None, options=None):
         """
         重置环境到初始状态
-        
+
+        参数：
+        - seed: 随机种子（可选，用于 Gymnasium 兼容性）
+        - options: 额外选项（可选，用于 Gymnasium 兼容性）
+
         返回：
-        - state: 初始状态向量
+        - state: 初始状态向量（兼容旧版 Gym API）
         """
+        # 设置随机种子（如果提供）
+        if seed is not None:
+            np.random.seed(seed)
+
         self._num_steps = 0
         self._terminated = False
         self._episode_energy = 0.0
         self._episode_violations = 0
-        
+        self._last_reward = 0.0
+
         # ========== 随机初始化物理状态 ==========
         # 机房温度：目标温度附近随机扰动
         self.T_in = self.target_temp + np.random.uniform(-1.0, 1.0)
-        
+
         # 室外温度：根据季节随机
         if self.use_real_weather and self.weather_data is not None:
             # 从真实数据随机选择一天的起点
@@ -179,10 +188,10 @@ class DataCenterEnv(gym.Env):
         else:
             # 模拟数据：15-35°C随机
             self.T_out = np.random.uniform(15.0, 35.0)
-        
+
         # 湿度：正常范围随机
         self.H_in = np.random.uniform(45.0, 55.0)
-        
+
         # IT负载：根据时间模拟（早上低，下午高）
         if self.workload_data is not None:
             start_idx = np.random.randint(0, len(self.workload_data) - self.episode_length)
@@ -191,13 +200,14 @@ class DataCenterEnv(gym.Env):
         else:
             # 模拟负载：100-400kW
             self.IT_load = np.random.uniform(100.0, 400.0)
-        
+
         # 供风温度：初始设定为20°C
         self.T_supply = np.ones(self.num_crac) * 20.0
-        
+
         # ========== 构造状态向量 ==========
         self._state = self._get_state()
-        
+
+        # 返回状态（兼容旧版 Gym API，Tianshou 0.4.11 需要）
         return self._state
     
     def _get_state(self) -> np.ndarray:
@@ -348,43 +358,70 @@ class DataCenterEnv(gym.Env):
     
     def _compute_reward(self, T_in: float, energy: float) -> Tuple[float, Dict]:
         """
-        计算奖励函数
-        
-        奖励设计：
-        reward = -α*能耗 - β*温度偏差² - γ*越界惩罚
-        
+        计算奖励函数 (改进版 v2)
+
+        改进点:
+        1. 降低惩罚权重 (10倍) - 避免过大负奖励
+        2. 添加正向奖励 (温度舒适度) - 提供正向信号
+        3. 归一化能耗惩罚 - 统一奖励尺度
+        4. 基础存活奖励 - 鼓励策略保持运行
+
+        预期奖励范围: -20 ~ +15 (单步), 回合累积: +500 ~ +3000
+
         参数：
-        - T_in: 当前机房温度
+        - T_in: 当前机房温度 (°C)
         - energy: 当前步能耗 (kWh)
-        
+
         返回：
         - reward: 总奖励
         - info: 奖励分解信息
         """
-        # 1. 能耗惩罚（归一化到合理范围）
-        energy_penalty = self.alpha * energy / 100.0  # 假设单步最大能耗~100kWh
-        
-        # 2. 温度偏差惩罚
-        temp_deviation = T_in - self.target_temp
-        temp_penalty = self.beta * (temp_deviation ** 2)
-        
-        # 3. 温度越界惩罚（硬约束）
+        import numpy as np
+
+        # ========== 1. 温度舒适度奖励 (高斯型) ==========
+        # 在目标温度时奖励最大, 偏离时指数衰减
+        temp_error = abs(T_in - self.target_temp)
+        temp_reward = 10.0 * np.exp(-0.5 * (temp_error ** 2))  # 范围: 0-10
+
+        # ========== 2. 温度惩罚 (降低权重) ==========
+        # beta: 10.0 → 1.0 (降低10倍)
+        temp_penalty = 1.0 * (temp_error ** 2)
+
+        # ========== 3. 能耗惩罚 (归一化) ==========
+        # 归一化到 [0, 1], 假设单步最大能耗 10kWh
+        energy_normalized = energy / 10.0
+        # alpha: 1.0 → 0.1 (降低10倍)
+        energy_penalty = 0.1 * energy_normalized
+
+        # ========== 4. 越界惩罚 (降低权重) ==========
+        # gamma: 100.0 → 10.0 (降低10倍)
         if T_in < self.T_min or T_in > self.T_max:
-            violation_penalty = self.gamma
+            violation_penalty = 10.0
+            violation = 1
         else:
             violation_penalty = 0.0
-        
-        # 总奖励（负值，最小化）
-        reward = -(energy_penalty + temp_penalty + violation_penalty)
-        
-        # 奖励分解信息
+            violation = 0
+
+        # ========== 5. 基础存活奖励 ==========
+        # 每步给予小的正奖励
+        base_reward = 1.0
+
+        # ========== 6. 总奖励 (正负平衡) ==========
+        # reward = 基础 + 温度奖励 - 温度惩罚 - 能耗惩罚 - 越界惩罚
+        reward = base_reward + temp_reward - temp_penalty - energy_penalty - violation_penalty
+
+        # ========== 7. 奖励分解信息 ==========
         info = {
+            'reward_base': base_reward,
+            'reward_temp': temp_reward,
+            'reward_temp_penalty': -temp_penalty,
             'reward_energy': -energy_penalty,
-            'reward_temp': -temp_penalty,
             'reward_violation': -violation_penalty,
-            'temp_deviation': temp_deviation
+            'temp_error': temp_error,
+            'temp_deviation': T_in - self.target_temp,
+            'violation': violation
         }
-        
+
         return reward, info
     
     def render(self, mode='human'):

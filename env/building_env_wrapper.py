@@ -7,8 +7,8 @@
 import sys
 import os
 import numpy as np
-import gym
-from gym import spaces
+import gymnasium as gym
+from gymnasium import spaces
 from typing import Dict, Any, Tuple, Optional, Union
 
 # 添加 BEAR 到 Python 路径
@@ -123,11 +123,29 @@ class BearEnvWrapper(gym.Env):
         
         # ========== 获取环境信息 ==========
         self.roomnum = self.bear_params['roomnum']
-        self.state_dim = 3 * self.roomnum + 3
+        # BEAR 状态维度计算：
+        # - 房间温度 + 室外温度: roomnum + 1
+        # - GHI: roomnum
+        # - 地面温度: 1
+        # - 人员热负荷: roomnum
+        # 总维度 = (roomnum+1) + roomnum + 1 + roomnum = 3*roomnum + 2
+        self.state_dim = 3 * self.roomnum + 2
         self.action_dim = self.roomnum
-        
+
         # ========== 适配状态空间 ==========
         self.observation_space = self._adapt_observation_space()
+
+        # ========== 验证状态维度 ==========
+        # 检查实际的observation_space维度是否与计算的state_dim一致
+        actual_obs_dim = self.observation_space.shape[0]
+        if actual_obs_dim != self.state_dim:
+            print(f"⚠️  警告: 状态维度不一致!")
+            print(f"   计算的state_dim: {self.state_dim} (3*{self.roomnum}+2)")
+            print(f"   实际obs_space维度: {actual_obs_dim}")
+            print(f"   将使用实际维度: {actual_obs_dim}")
+            self.state_dim = actual_obs_dim
+        else:
+            print(f"✓ 状态维度验证通过: {self.state_dim} (3*{self.roomnum}+2)")
         
         # ========== 适配动作空间 ==========
         self.action_space = self._adapt_action_space()
@@ -190,15 +208,34 @@ class BearEnvWrapper(gym.Env):
     def _adapt_state(self, bear_state: np.ndarray) -> np.ndarray:
         """
         适配状态向量
-        
+
         参数：
         - bear_state: BEAR 环境返回的状态
-        
+
         返回：
         - np.ndarray: 适配后的状态（保持原格式）
         """
         # BEAR 的状态格式已经符合要求，直接返回
-        return bear_state.astype(np.float32)
+        state = bear_state.astype(np.float32)
+
+        # ========== 维度检查和修正 ==========
+        # 确保状态维度与预期一致
+        expected_dim = self.state_dim
+        actual_dim = len(state)
+
+        if actual_dim != expected_dim:
+            # 如果维度不匹配，进行填充或截断
+            if actual_dim < expected_dim:
+                # 填充零值
+                padding = np.zeros(expected_dim - actual_dim, dtype=np.float32)
+                state = np.concatenate([state, padding])
+                print(f"警告: 状态维度不匹配! 期望 {expected_dim}, 实际 {actual_dim}, 已填充零值")
+            else:
+                # 截断多余维度
+                state = state[:expected_dim]
+                print(f"警告: 状态维度不匹配! 期望 {expected_dim}, 实际 {actual_dim}, 已截断")
+
+        return state
     
     def _adapt_action(self, dropt_action: np.ndarray) -> np.ndarray:
         """
@@ -267,22 +304,17 @@ class BearEnvWrapper(gym.Env):
         """
         # 重置 BEAR 环境
         bear_state, bear_info = self.bear_env.reset(seed=seed, options=options)
-        
+
         # 适配状态
         state = self._adapt_state(bear_state)
-        
+
         # 重置计数器
         self.current_step = 0
         self.total_reward = 0.0
-        
-        # 构造信息字典
-        info = {
-            'bear_info': bear_info,
-            'building_type': self.building_type,
-            'weather_type': self.weather_type,
-            'roomnum': self.roomnum,
-        }
-        
+
+        # 返回空的info字典以兼容Tianshou
+        info = {}
+
         return state, info
     
     def step(

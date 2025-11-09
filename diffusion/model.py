@@ -82,15 +82,22 @@ class MLP(nn.Module):
     def forward(self, x, time, state):
         """
         前向传播
-        
+
         参数：
         - x: 带噪声的动作
         - time: 时间步
         - state: 环境状态
-        
+
         返回：
         - 去噪预测
         """
+        # 确保所有输入在同一设备上
+        device = x.device
+        if time.device != device:
+            time = time.to(device)
+        if state.device != device:
+            state = state.to(device)
+
         # 编码状态
         processed_state = self.state_mlp(state)
         # 编码时间

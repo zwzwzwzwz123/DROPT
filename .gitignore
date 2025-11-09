@@ -1,0 +1,469 @@
+# ============================================================================
+# .gitignore for DROPT (Diffusion-based Reinforcement Learning for Optimization)
+# ============================================================================
+# 项目：数据中心和建筑环境的 HVAC 优化
+# 框架：PyTorch + Tianshou + BEAR
+# ============================================================================
+
+# ============================================================================
+# 1. Python 相关
+# ============================================================================
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Translations
+*.mo
+*.pot
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# poetry
+poetry.lock
+
+# pdm
+.pdm.toml
+
+# PEP 582
+__pypackages__/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.conda/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# ============================================================================
+# 2. 深度学习和训练相关
+# ============================================================================
+
+# PyTorch 模型文件
+*.pth
+*.pt
+*.ckpt
+*.pkl
+*.pickle
+
+# TensorBoard 日志
+events.out.tfevents.*
+*.tfevents.*
+
+# 训练日志目录（保留目录结构，忽略内容）
+log/
+log_*/
+logs/
+!log/.gitkeep
+!log_building/.gitkeep
+!log_datacenter/.gitkeep
+
+# 检查点和模型保存
+checkpoints/
+checkpoint_*/
+models/
+saved_models/
+policy_*.pth
+checkpoint_*.pth
+
+# 训练输出和结果
+results/
+outputs/
+runs/
+experiments/
+
+# 可视化输出
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+# 但保留文档中的图片
+!docs/*.png
+!docs/*.jpg
+!docs/*.jpeg
+!docs/Images/*.png
+!docs/Images/*.jpg
+!BEAR/Images/*.png
+!BEAR/Images/*.jpg
+
+# ============================================================================
+# 3. 数据文件
+# ============================================================================
+
+# 大型数据集
+data/
+dataset/
+datasets/
+*.csv
+*.tsv
+*.dat
+*.h5
+*.hdf5
+*.npy
+*.npz
+# 但保留示例和模板
+!data/.gitkeep
+!*template*.csv
+!*example*.csv
+!*sample*.csv
+
+# 天气数据和负载轨迹（生成的）
+weather_data.csv
+workload_trace.csv
+
+# 专家数据（生成的）
+expert_data/
+expert_trajectories/
+
+# ============================================================================
+# 4. IDE 和编辑器
+# ============================================================================
+
+# VSCode
+.vscode/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/*.code-snippets
+*.code-workspace
+
+# PyCharm
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+[._]*.s[a-v][a-z]
+[._]*.sw[a-p]
+[._]s[a-rt-v][a-z]
+[._]ss[a-gi-z]
+[._]sw[a-p]
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Eclipse
+.project
+.classpath
+.settings/
+
+# NetBeans
+nbproject/
+nbbuild/
+nbdist/
+.nb-gradle/
+
+# ============================================================================
+# 5. 操作系统
+# ============================================================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# ============================================================================
+# 6. 临时文件和缓存
+# ============================================================================
+
+# 临时目录
+tmp/
+temp/
+temporary/
+cache/
+.cache/
+
+# 日志文件
+*.log
+*.log.*
+*.out
+*.err
+
+# 临时文件
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+*.orig
+
+# 锁文件
+*.lock
+.lock
+
+# ============================================================================
+# 7. 文档生成
+# ============================================================================
+
+# Sphinx documentation
+docs/_build/
+docs/_static/
+docs/_templates/
+
+# LaTeX
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.lof
+*.lot
+*.out
+*.toc
+*.synctex.gz
+
+# PDF（如果是生成的）
+# *.pdf
+
+# ============================================================================
+# 8. 项目特定
+# ============================================================================
+
+# DROPT 训练输出
+log/default/
+log_building/default_*/
+log_datacenter/default_*/
+log_building/*_*/
+log_datacenter/*_*/
+
+# 专家控制器生成的数据
+expert_*.csv
+expert_*.npy
+
+# 实验结果
+experiment_results/
+comparison_results/
+
+# 性能分析
+*.prof
+*.profile
+
+# 调试输出
+debug/
+debug_*/
+*.debug
+
+# 测试输出
+test_output/
+test_results/
+
+# ============================================================================
+# 9. 第三方和依赖
+# ============================================================================
+
+# BEAR 生成的文件（如果有）
+BEAR/output/
+BEAR/results/
+BEAR/logs/
+
+# 下载的预训练模型
+pretrained/
+pretrained_models/
+
+# ============================================================================
+# 10. 安全和敏感信息
+# ============================================================================
+
+# 环境变量
+.env
+.env.local
+.env.*.local
+*.env
+
+# 密钥和凭证
+*.key
+*.pem
+*.crt
+*.cer
+secrets/
+credentials/
+
+# 配置文件（如果包含敏感信息）
+# config.yaml
+# config.json
+
+# ============================================================================
+# 11. 其他
+# ============================================================================
+
+# 压缩文件
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+
+# 数据库
+*.db
+*.sqlite
+*.sqlite3
+
+# 备份
+backup/
+backups/
+
+# 草稿和笔记
+draft/
+drafts/
+notes/
+scratch/
+
+# ============================================================================
+# 保留的文件和目录
+# ============================================================================
+# 以下文件和目录应该被保留在版本控制中：
+# - 所有源代码文件 (*.py)
+# - 配置文件 (*.yaml, *.json, *.toml)
+# - 文档文件 (*.md, docs/)
+# - 脚本文件 (scripts/)
+# - 示例数据和模板
+# - README 和 LICENSE
+# - requirements.txt
+# - .gitignore 本身
+# ============================================================================
+

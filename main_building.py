@@ -234,7 +234,7 @@ def main():
         max_action=max_action,
         beta_schedule=args.beta_schedule,
         n_timesteps=args.diffusion_steps,
-    )
+    ).to(args.device)
     
     # ========== 创建策略 ==========
     print("\n正在创建策略...")

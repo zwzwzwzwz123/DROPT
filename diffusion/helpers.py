@@ -26,6 +26,9 @@ class SinusoidalPosEmb(nn.Module):
 
 def extract(a, t, x_shape):
     b, *_ = t.shape
+    # 确保 a 和 t 在同一设备上
+    if a.device != t.device:
+        a = a.to(t.device)
     out = a.gather(-1, t)
     return out.reshape(b, *((1,) * (len(x_shape) - 1)))
 

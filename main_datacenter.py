@@ -82,8 +82,8 @@ def get_args():
                         help='并行测试环境数量')
     
     # ========== 网络架构参数 ==========
-    parser.add_argument('--hidden-sizes', type=int, nargs='+', default=[256, 256, 256],
-                        help='MLP隐藏层大小')
+    parser.add_argument('--hidden-dim', type=int, default=256,
+                        help='MLP隐藏层维度')
     
     # ========== 日志和设备参数 ==========
     parser.add_argument('--logdir', type=str, default='log_datacenter',
@@ -181,7 +181,7 @@ def main(args=None):
     actor_net = MLP(
         state_dim=args.state_shape,
         action_dim=args.action_shape,
-        hidden_sizes=args.hidden_sizes  # 可自定义隐藏层
+        hidden_dim=args.hidden_dim  # 隐藏层维度
     )
     
     actor = Diffusion(
@@ -202,14 +202,14 @@ def main(args=None):
     
     print(f"  ✓ 扩散步数: {args.n_timesteps}")
     print(f"  ✓ 噪声调度: {args.beta_schedule}")
-    print(f"  ✓ 网络结构: {args.hidden_sizes}")
+    print(f"  ✓ 网络结构: {args.hidden_dim}")
     
     # ========== 创建Critic网络（双Q网络） ==========
     print("\n[3/6] 初始化Critic网络（双Q网络）...")
     critic = DoubleCritic(
         state_dim=args.state_shape,
         action_dim=args.action_shape,
-        hidden_sizes=args.hidden_sizes
+        hidden_dim=args.hidden_dim
     ).to(args.device)
     
     critic_optim = torch.optim.AdamW(

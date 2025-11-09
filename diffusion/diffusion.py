@@ -98,9 +98,9 @@ class Diffusion(nn.Module):
         # 后验均值的两个系数
         # μ_θ(x_t, t) = coef1 * x_0 + coef2 * x_t
         self.register_buffer('posterior_mean_coef1',
-                             betas * np.sqrt(alphas_cumprod_prev) / (1. - alphas_cumprod))
+                             betas * torch.sqrt(alphas_cumprod_prev) / (1. - alphas_cumprod))
         self.register_buffer('posterior_mean_coef2',
-                             (1. - alphas_cumprod_prev) * np.sqrt(alphas) / (1. - alphas_cumprod))
+                             (1. - alphas_cumprod_prev) * torch.sqrt(alphas) / (1. - alphas_cumprod))
 
         # ========== 选择损失函数 ==========
         self.loss_fn = Losses[loss_type]()
