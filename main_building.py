@@ -17,6 +17,31 @@ import warnings
 
 # 导入建筑环境
 from env.building_env_wrapper import make_building_env
+# 导入配置常量（修复：统一管理配置参数，避免硬编码）
+from env.building_config import (
+    DEFAULT_REWARD_SCALE,
+    DEFAULT_ENERGY_WEIGHT,
+    DEFAULT_TEMP_WEIGHT,
+    DEFAULT_VIOLATION_PENALTY,
+    DEFAULT_TARGET_TEMP,
+    DEFAULT_TEMP_TOLERANCE,
+    DEFAULT_MAX_POWER,
+    DEFAULT_TIME_RESOLUTION,
+    DEFAULT_TRAINING_NUM,
+    DEFAULT_TEST_NUM,
+    DEFAULT_BUFFER_SIZE,
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_GAMMA,
+    DEFAULT_N_STEP,
+    DEFAULT_DIFFUSION_STEPS,
+    DEFAULT_BETA_SCHEDULE,
+    DEFAULT_HIDDEN_DIM,
+    DEFAULT_ACTOR_LR,
+    DEFAULT_CRITIC_LR,
+    DEFAULT_EXPLORATION_NOISE,
+    DEFAULT_LOG_DIR,
+    DEFAULT_SAVE_INTERVAL,
+)
 
 # 导入 DROPT 核心组件
 from policy import DiffusionOPT
@@ -32,31 +57,31 @@ def get_args():
     """
     parser = argparse.ArgumentParser(description='BEAR 建筑环境 HVAC 优化训练程序')
     
-    # ========== 环境参数 ==========
+    # ========== 环境参数（使用配置常量作为默认值） ==========
     parser.add_argument('--building-type', type=str, default='OfficeSmall',
                         help='建筑类型 (OfficeSmall, Hospital, SchoolPrimary等)')
     parser.add_argument('--weather-type', type=str, default='Hot_Dry',
                         help='气候类型 (Hot_Dry, Hot_Humid, Cold_Humid等)')
     parser.add_argument('--location', type=str, default='Tucson',
                         help='地理位置 (Tucson, Tampa, Rochester等)')
-    parser.add_argument('--target-temp', type=float, default=22.0,
-                        help='目标温度 (°C)')
-    parser.add_argument('--temp-tolerance', type=float, default=2.0,
-                        help='温度容差 (°C)')
-    parser.add_argument('--max-power', type=int, default=8000,
-                        help='HVAC 最大功率 (W)')
-    parser.add_argument('--time-resolution', type=int, default=3600,
-                        help='时间分辨率 (秒，默认3600=1小时)')
+    parser.add_argument('--target-temp', type=float, default=DEFAULT_TARGET_TEMP,
+                        help=f'目标温度 (°C，默认{DEFAULT_TARGET_TEMP})')
+    parser.add_argument('--temp-tolerance', type=float, default=DEFAULT_TEMP_TOLERANCE,
+                        help=f'温度容差 (°C，默认{DEFAULT_TEMP_TOLERANCE})')
+    parser.add_argument('--max-power', type=int, default=DEFAULT_MAX_POWER,
+                        help=f'HVAC 最大功率 (W，默认{DEFAULT_MAX_POWER})')
+    parser.add_argument('--time-resolution', type=int, default=DEFAULT_TIME_RESOLUTION,
+                        help=f'时间分辨率 (秒，默认{DEFAULT_TIME_RESOLUTION}=1小时)')
     parser.add_argument('--episode-length', type=int, default=None,
                         help='回合长度（步数，None表示完整年度）')
-    parser.add_argument('--energy-weight', type=float, default=0.001,
-                        help='能耗权重 α')
-    parser.add_argument('--temp-weight', type=float, default=0.999,
-                        help='温度偏差权重 β')
+    parser.add_argument('--energy-weight', type=float, default=DEFAULT_ENERGY_WEIGHT,
+                        help=f'能耗权重 α (默认{DEFAULT_ENERGY_WEIGHT})')
+    parser.add_argument('--temp-weight', type=float, default=DEFAULT_TEMP_WEIGHT,
+                        help=f'温度偏差权重 β (默认{DEFAULT_TEMP_WEIGHT})')
     parser.add_argument('--add-violation-penalty', action='store_true', default=False,
                         help='是否添加温度越界惩罚')
-    parser.add_argument('--violation-penalty', type=float, default=100.0,
-                        help='温度越界惩罚系数 γ')
+    parser.add_argument('--violation-penalty', type=float, default=DEFAULT_VIOLATION_PENALTY,
+                        help=f'温度越界惩罚系数 γ (默认{DEFAULT_VIOLATION_PENALTY})')
 
     # ========== 专家控制器参数 ==========
     parser.add_argument('--expert-type', type=str, default=None,
@@ -67,51 +92,53 @@ def get_args():
     parser.add_argument('--bc-weight', type=float, default=1.0,
                         help='行为克隆损失权重')
     
-    # ========== 基础训练参数 ==========
-    parser.add_argument('--exploration-noise', type=float, default=0.1,
-                        help='探索噪声标准差')
+    # ========== 基础训练参数（使用配置常量作为默认值） ==========
+    parser.add_argument('--exploration-noise', type=float, default=DEFAULT_EXPLORATION_NOISE,
+                        help=f'探索噪声标准差 (默认{DEFAULT_EXPLORATION_NOISE})')
     parser.add_argument('--algorithm', type=str, default='diffusion_opt',
                         help='算法名称')
     parser.add_argument('--seed', type=int, default=42,
                         help='随机种子')
-    parser.add_argument('--buffer-size', type=int, default=1000000,
-                        help='经验回放缓冲区大小')
+    parser.add_argument('--buffer-size', type=int, default=DEFAULT_BUFFER_SIZE,
+                        help=f'经验回放缓冲区大小 (默认{DEFAULT_BUFFER_SIZE:,})')
     parser.add_argument('-e', '--epoch', type=int, default=50000,
                         help='总训练轮次')
     parser.add_argument('--step-per-epoch', type=int, default=1,
                         help='每个训练轮次的步数')
     parser.add_argument('--step-per-collect', type=int, default=1,
                         help='每次收集的步数')
-    parser.add_argument('-b', '--batch-size', type=int, default=256,
-                        help='批次大小')
+    parser.add_argument('-b', '--batch-size', type=int, default=DEFAULT_BATCH_SIZE,
+                        help=f'批次大小 (默认{DEFAULT_BATCH_SIZE})')
     parser.add_argument('--wd', type=float, default=1e-4,
                         help='权重衰减系数')
-    parser.add_argument('--gamma', type=float, default=0.99,
-                        help='折扣因子')
-    parser.add_argument('--n-step', type=int, default=3,
-                        help='N步TD学习')
-    parser.add_argument('--training-num', type=int, default=4,
-                        help='并行训练环境数量')
-    parser.add_argument('--test-num', type=int, default=2,
-                        help='并行测试环境数量')
-    
-    # ========== 网络架构参数 ==========
-    parser.add_argument('--hidden-dim', type=int, default=256,
-                        help='MLP隐藏层维度')
-    parser.add_argument('--actor-lr', type=float, default=3e-4,
-                        help='Actor学习率')
-    parser.add_argument('--critic-lr', type=float, default=3e-4,
-                        help='Critic学习率')
-    
-    # ========== 扩散模型参数 ==========
-    parser.add_argument('--diffusion-steps', type=int, default=5,
-                        help='扩散步数')
-    parser.add_argument('--beta-schedule', type=str, default='vp',
-                        help='噪声调度类型')
-    
-    # ========== 日志和设备参数 ==========
-    parser.add_argument('--logdir', type=str, default='log_building',
-                        help='日志保存目录')
+    parser.add_argument('--gamma', type=float, default=DEFAULT_GAMMA,
+                        help=f'折扣因子 (默认{DEFAULT_GAMMA})')
+    parser.add_argument('--n-step', type=int, default=DEFAULT_N_STEP,
+                        help=f'N步TD学习 (默认{DEFAULT_N_STEP})')
+    parser.add_argument('--training-num', type=int, default=DEFAULT_TRAINING_NUM,
+                        help=f'并行训练环境数量 (默认{DEFAULT_TRAINING_NUM})')
+    parser.add_argument('--test-num', type=int, default=DEFAULT_TEST_NUM,
+                        help=f'并行测试环境数量 (默认{DEFAULT_TEST_NUM})')
+
+    # ========== 网络架构参数（使用配置常量作为默认值） ==========
+    parser.add_argument('--hidden-dim', type=int, default=DEFAULT_HIDDEN_DIM,
+                        help=f'MLP隐藏层维度 (默认{DEFAULT_HIDDEN_DIM})')
+    parser.add_argument('--actor-lr', type=float, default=DEFAULT_ACTOR_LR,
+                        help=f'Actor学习率 (默认{DEFAULT_ACTOR_LR})')
+    parser.add_argument('--critic-lr', type=float, default=DEFAULT_CRITIC_LR,
+                        help=f'Critic学习率 (默认{DEFAULT_CRITIC_LR})')
+    parser.add_argument('--reward-scale', type=float, default=DEFAULT_REWARD_SCALE,
+                        help=f'奖励缩放系数（降低奖励尺度，稳定训练，默认{DEFAULT_REWARD_SCALE}）')
+
+    # ========== 扩散模型参数（使用配置常量作为默认值） ==========
+    parser.add_argument('--diffusion-steps', type=int, default=DEFAULT_DIFFUSION_STEPS,
+                        help=f'扩散步数 (默认{DEFAULT_DIFFUSION_STEPS})')
+    parser.add_argument('--beta-schedule', type=str, default=DEFAULT_BETA_SCHEDULE,
+                        help=f'噪声调度类型 (默认{DEFAULT_BETA_SCHEDULE})')
+
+    # ========== 日志和设备参数（使用配置常量作为默认值） ==========
+    parser.add_argument('--logdir', type=str, default=DEFAULT_LOG_DIR,
+                        help=f'日志保存目录 (默认{DEFAULT_LOG_DIR})')
     parser.add_argument('--log-prefix', type=str, default='default',
                         help='日志文件前缀')
     parser.add_argument('--device', type=str, default='cuda:0',
@@ -122,8 +149,8 @@ def get_args():
                         help='观察模式（不训练）')
     parser.add_argument('--lr-decay', action='store_true', default=False,
                         help='是否使用学习率衰减')
-    parser.add_argument('--save-interval', type=int, default=1000,
-                        help='模型保存间隔（轮次）')
+    parser.add_argument('--save-interval', type=int, default=DEFAULT_SAVE_INTERVAL,
+                        help=f'模型保存间隔（轮次，默认{DEFAULT_SAVE_INTERVAL}）')
     
     args = parser.parse_args()
     return args
@@ -174,6 +201,7 @@ def main():
         episode_length=args.episode_length,
         add_violation_penalty=args.add_violation_penalty,
         violation_penalty=args.violation_penalty,
+        reward_scale=args.reward_scale,  # 奖励缩放，降低Q值和损失的尺度
         expert_type=args.expert_type if args.bc_coef else None,
         training_num=args.training_num,
         test_num=args.test_num
@@ -186,6 +214,7 @@ def main():
     print(f"  房间数量: {env.roomnum}")
     print(f"  状态维度: {env.state_dim}")
     print(f"  动作维度: {env.action_dim}")
+    print(f"  奖励缩放系数: {env.reward_scale}")
     if args.expert_type:
         print(f"  专家控制器: {args.expert_type}")
     
@@ -254,6 +283,7 @@ def main():
         estimation_step=args.n_step,
         lr_decay=args.lr_decay,
         lr_maxt=args.epoch,
+        reward_normalization=False,  # Tianshou不支持N步回报+奖励归一化
     )
     
     print(f"✓ 策略创建成功")
@@ -282,7 +312,11 @@ def main():
     print("\n" + "=" * 60)
     print("  开始训练")
     print("=" * 60)
-    
+    print(f"\n⚠️ 注意: 奖励已缩放 {args.reward_scale}x")
+    print(f"  - 训练日志显示的是缩放后的奖励")
+    print(f"  - 真实奖励 = 显示奖励 / {args.reward_scale}")
+    print(f"  - 例如: test_reward=-20000 → 真实奖励=-200000\n")
+
     result = offpolicy_trainer(
         policy=policy,
         train_collector=train_collector,

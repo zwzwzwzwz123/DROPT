@@ -106,8 +106,8 @@ def get_args():
                         help='Critic学习率')
     parser.add_argument('--tau', type=float, default=0.005,
                         help='目标网络软更新系数')
-    parser.add_argument('-t', '--n-timesteps', type=int, default=5,
-                        help='扩散时间步数（建议5-8）')
+    parser.add_argument('-t', '--n-timesteps', type=int, default=10,
+                        help='扩散时间步数（建议10-15，从5增加到10以提升生成质量）')
     parser.add_argument('--beta-schedule', type=str, default='vp',
                         choices=['linear', 'cosine', 'vp'],
                         help='噪声调度策略')

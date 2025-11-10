@@ -81,20 +81,22 @@ class PIDController:
         Kp: float = 2.0,    # 比例增益
         Ki: float = 0.1,    # 积分增益
         Kd: float = 0.5,    # 微分增益
+        dt: float = 5.0,    # 时间步长（分钟），修复：添加dt参数
     ):
         self.num_crac = num_crac
         self.target_temp = target_temp
-        
+
         # PID参数
         self.Kp = Kp
         self.Ki = Ki
         self.Kd = Kd
-        
+        self.dt = dt  # 修复：保存时间步长
+
         # 状态变量
         self.error_integral = 0.0  # 积分项
         self.last_error = 0.0      # 上一次误差（用于微分）
         self.error_history = deque(maxlen=10)  # 误差历史
-        
+
         # 动作范围
         self.T_set_min = 18.0
         self.T_set_max = 28.0
@@ -123,18 +125,18 @@ class PIDController:
         # ========== 2. PID计算 ==========
         # 比例项
         P = self.Kp * error
-        
+
         # 积分项（带抗饱和）
-        self.error_integral += error
+        self.error_integral += error * self.dt  # 修复：积分项乘以dt
         self.error_integral = np.clip(self.error_integral, -10.0, 10.0)
         I = self.Ki * self.error_integral
-        
-        # 微分项
+
+        # 微分项（修复：除以dt进行归一化）
         if len(self.error_history) >= 2:
-            D = self.Kd * (error - self.last_error)
+            D = self.Kd * (error - self.last_error) / self.dt
         else:
             D = 0.0
-        
+
         # PID输出
         u = P + I + D
         

@@ -102,35 +102,56 @@ class BearMPCWrapper(BaseBearController):
         self.gamma = gamma
         self.safety_margin = safety_margin
         self.planning_steps = planning_steps
-    
+
+        # 修复：保存上一步动作作为备用
+        self.last_action = None
+        self.failure_count = 0
+
     def get_action(self, state: np.ndarray) -> np.ndarray:
         """
         使用 MPC 获取最优控制动作
-        
+
         Args:
             state: 当前状态
-        
+
         Returns:
             action: MPC 计算的最优动作
+
+        修复：MPC 求解失败时使用备用策略而非零动作
         """
         try:
             # 调用 BEAR 的 MPC 控制器
             action, predicted_state = self.mpc_agent.predict(self.bear_env)
-            
+
             # 确保动作在有效范围内
             action = np.clip(action, -1.0, 1.0)
-            
+
+            # 保存成功的动作
+            self.last_action = action.copy()
+            self.failure_count = 0
+
             return action.astype(np.float32)
-        
+
         except Exception as e:
-            # 如果 MPC 求解失败，返回零动作
-            print(f"警告: MPC 求解失败 ({e})，返回零动作")
-            return np.zeros(self.roomnum, dtype=np.float32)
+            # 修复：MPC 求解失败时使用备用策略
+            self.failure_count += 1
+            print(f"警告: MPC 求解失败 ({e})，使用备用策略 (失败次数: {self.failure_count})")
+
+            # 备用策略1：使用上一步动作
+            if self.last_action is not None:
+                return self.last_action.astype(np.float32)
+
+            # 备用策略2：使用保守的默认动作（轻微加热）
+            # 假设负值表示加热，正值表示制冷
+            default_action = np.full(self.roomnum, -0.2, dtype=np.float32)
+            return default_action
     
     def reset(self):
         """重置 MPC 控制器"""
         # MPC 是无状态的，每次都重新求解，不需要重置
-        pass
+        # 修复：重置备用动作和失败计数
+        self.last_action = None
+        self.failure_count = 0
 
 
 class BearPIDController(BaseBearController):

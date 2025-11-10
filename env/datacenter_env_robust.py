@@ -99,24 +99,34 @@ class RobustDataCenterEnv(DataCenterEnv):
             self.action_buffer = deque(maxlen=self.action_delay_steps + 1)
         else:
             self.action_buffer = None
-        
+
         # 上一步动作（用于平滑约束）
         self.last_action = None
-        
+
         # 域随机化参数（每个episode随机化）
         self.randomized_params = {}
+
+        # ========== 保存原始物理参数（修复：避免累积修改） ==========
+        self._original_params = {
+            'thermal_mass': self.thermal_model.thermal_mass,
+            'UA_wall': self.thermal_model.UA_wall,
+            'COP_nominal': self.thermal_model.COP_nominal,
+            'Q_crac_max': self.thermal_model.Q_crac_max,
+        }
     
-    def reset(self) -> np.ndarray:
+    def reset(self, seed=None, options=None) -> Tuple[np.ndarray, Dict]:
         """
         重置环境，应用域随机化
+
+        修复：更新返回值以符合 Gymnasium API（返回 state, info）
         """
         # 域随机化：每个episode随机化物理参数
         if self.domain_randomization:
             self._randomize_domain()
-        
-        # 重置基类
-        state = super().reset()
-        
+
+        # 重置基类（现在返回 state, info）
+        state, info = super().reset(seed=seed, options=options)
+
         # 重置动作缓冲区
         if self.action_buffer is not None:
             self.action_buffer.clear()
@@ -124,73 +134,85 @@ class RobustDataCenterEnv(DataCenterEnv):
             zero_action = np.zeros(self.action_dim)
             for _ in range(self.action_delay_steps + 1):
                 self.action_buffer.append(zero_action)
-        
+
         # 重置上一步动作
         self.last_action = np.zeros(self.action_dim)
-        
+
         # 添加观测噪声
         if self.observation_noise:
             state = self._add_observation_noise(state)
-        
-        return state
+
+        # 添加鲁棒性相关信息
+        info['randomized_params'] = self.randomized_params
+        info['action_delay'] = self.action_delay_steps
+
+        return state, info
     
-    def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, Dict]:
+    def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict]:
         """
         执行一步，应用动作延迟和平滑约束
+
+        修复：
+        1. 正确实现动作延迟（先取出旧动作，再添加新动作）
+        2. 更新返回值以符合 Gymnasium API（5个值）
         """
         # 1. 动作平滑约束
         if self.action_smoothing and self.last_action is not None:
             action = self._smooth_action(action, self.last_action)
-        
-        # 2. 动作延迟
+
+        # 2. 动作延迟（修复：正确的延迟逻辑）
         if self.action_buffer is not None:
+            # 先取出延迟后的动作（最旧的）
+            actual_action = self.action_buffer[0]
+            # 再添加新动作到缓冲区末尾（deque 会自动移除最旧的）
             self.action_buffer.append(action.copy())
-            actual_action = self.action_buffer[0]  # 使用延迟后的动作
         else:
             actual_action = action
-        
+
         # 3. 模型不确定性（随机扰动）
         if self.model_uncertainty:
             actual_action = self._add_action_uncertainty(actual_action)
-        
-        # 4. 执行动作（调用基类）
-        next_state, reward, done, info = super().step(actual_action)
-        
+
+        # 4. 执行动作（调用基类，现在返回5个值）
+        next_state, reward, terminated, truncated, info = super().step(actual_action)
+
         # 5. 添加观测噪声
         if self.observation_noise:
             next_state = self._add_observation_noise(next_state)
-        
+
         # 6. 记录信息
         info['actual_action'] = actual_action
         info['requested_action'] = action
         info['action_delay'] = self.action_delay_steps
         info['randomized_params'] = self.randomized_params
-        
+
         # 7. 更新上一步动作
         self.last_action = action.copy()
-        
-        return next_state, reward, done, info
+
+        return next_state, reward, terminated, truncated, info
     
     def _randomize_domain(self):
         """
         域随机化：随机化物理参数
+
+        修复：基于原始参数进行随机化，避免累积修改
         """
-        # 随机化热容
+        # 随机化热容（基于原始值）
         thermal_mass_scale = np.random.uniform(*self.thermal_mass_range)
-        self.thermal_model.thermal_mass *= thermal_mass_scale
-        
-        # 随机化墙体热传导
+        self.thermal_model.thermal_mass = self._original_params['thermal_mass'] * thermal_mass_scale
+
+        # 随机化墙体热传导（基于原始值）
         wall_ua_scale = np.random.uniform(*self.wall_ua_range)
-        self.thermal_model.UA_wall *= wall_ua_scale
-        
-        # 随机化COP
+        self.thermal_model.UA_wall = self._original_params['UA_wall'] * wall_ua_scale
+
+        # 随机化COP（基于原始值）
         cop_scale = np.random.uniform(*self.cop_range)
-        self.thermal_model.COP_nominal *= cop_scale
-        
-        # 随机化CRAC容量
+        self.thermal_model.COP_nominal = self._original_params['COP_nominal'] * cop_scale
+
+        # 随机化CRAC容量（基于原始值）
         capacity_scale = np.random.uniform(*self.capacity_range)
-        self.thermal_model.Q_crac_max *= capacity_scale
-        
+        self.thermal_model.Q_crac_max = self._original_params['Q_crac_max'] * capacity_scale
+
         # 记录随机化参数
         self.randomized_params = {
             'thermal_mass_scale': thermal_mass_scale,

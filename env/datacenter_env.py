@@ -163,7 +163,10 @@ class DataCenterEnv(gym.Env):
         - options: 额外选项（可选，用于 Gymnasium 兼容性）
 
         返回：
-        - state: 初始状态向量（兼容旧版 Gym API）
+        - state: 初始状态向量
+        - info: 环境信息字典（符合 Gymnasium API）
+
+        注意：修复了 API 兼容性问题，现在返回 (state, info) 元组
         """
         # 设置随机种子（如果提供）
         if seed is not None:
@@ -207,8 +210,16 @@ class DataCenterEnv(gym.Env):
         # ========== 构造状态向量 ==========
         self._state = self._get_state()
 
-        # 返回状态（兼容旧版 Gym API，Tianshou 0.4.11 需要）
-        return self._state
+        # ========== 构造初始信息字典 ==========
+        info = {
+            'T_in': self.T_in,
+            'T_out': self.T_out,
+            'H_in': self.H_in,
+            'IT_load': self.IT_load,
+        }
+
+        # 返回 (state, info) 元组（符合 Gymnasium API）
+        return self._state, info
     
     def _get_state(self) -> np.ndarray:
         """
@@ -252,24 +263,27 @@ class DataCenterEnv(gym.Env):
         
         return T_set, fan_speed
     
-    def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, Dict[str, Any]]:
+    def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
         """
         执行一步环境交互
-        
+
         参数：
         - action: 策略输出的动作（归一化）
-        
+
         返回：
         - next_state: 下一个状态
         - reward: 奖励值
-        - done: 是否结束
+        - terminated: 是否因达到终止条件而结束（如温度严重越界）
+        - truncated: 是否因达到最大步数而截断
         - info: 额外信息（包含专家动作、能耗等）
+
+        注意：修复了 API 兼容性问题，现在返回 5 个值（符合 Gymnasium API）
         """
         assert not self._terminated, "回合已结束，请调用reset()"
-        
+
         # ========== 动作处理 ==========
         T_set, fan_speed = self._denormalize_action(action)
-        
+
         # ========== 获取专家动作（用于行为克隆） ==========
         expert_action = self.expert_controller.get_action(
             T_in=self.T_in,
@@ -277,7 +291,7 @@ class DataCenterEnv(gym.Env):
             H_in=self.H_in,
             IT_load=self.IT_load
         )
-        
+
         # ========== 更新环境动态 ==========
         # 使用热力学模型计算下一时刻的温度、湿度
         next_T_in, next_H_in, next_T_supply, energy_consumed = self.thermal_model.step(
@@ -288,10 +302,10 @@ class DataCenterEnv(gym.Env):
             T_set=T_set,
             fan_speed=fan_speed
         )
-        
+
         # ========== 更新外部扰动 ==========
         self._num_steps += 1
-        
+
         # 更新室外温度
         if self.use_real_weather and self.weather_data is not None:
             idx = self.weather_start_idx + self._num_steps
@@ -302,7 +316,7 @@ class DataCenterEnv(gym.Env):
             hour = (self._num_steps * self.time_step) % 24
             self.T_out += 0.5 * np.sin(2 * np.pi * hour / 24) + np.random.normal(0, 0.2)
             self.T_out = np.clip(self.T_out, 15.0, 40.0)
-        
+
         # 更新IT负载
         if self.workload_data is not None:
             idx = self.workload_start_idx + self._num_steps
@@ -315,32 +329,37 @@ class DataCenterEnv(gym.Env):
                 self.IT_load = 300.0 + np.random.uniform(-50, 50)
             else:  # 夜间
                 self.IT_load = 150.0 + np.random.uniform(-30, 30)
-        
+
         # ========== 计算奖励 ==========
         reward, reward_info = self._compute_reward(
             T_in=next_T_in,
             energy=energy_consumed
         )
-        
+
         # ========== 更新状态 ==========
         self.T_in = next_T_in
         self.H_in = next_H_in
         self.T_supply = next_T_supply
         self._last_reward = reward
         self._episode_energy += energy_consumed
-        
+
         # 检查温度越界
-        if next_T_in < self.T_min or next_T_in > self.T_max:
+        temp_violation = next_T_in < self.T_min or next_T_in > self.T_max
+        if temp_violation:
             self._episode_violations += 1
-        
+
         # ========== 构造下一状态 ==========
         next_state = self._get_state()
-        
-        # ========== 检查是否结束 ==========
-        done = self._num_steps >= self.episode_length
-        if done:
+
+        # ========== 检查终止条件 ==========
+        # terminated: 因达到终止条件而结束（如严重越界）
+        # truncated: 因达到最大步数而截断
+        terminated = False  # 数据中心场景通常不提前终止
+        truncated = self._num_steps >= self.episode_length
+
+        if terminated or truncated:
             self._terminated = True
-        
+
         # ========== 返回信息 ==========
         info = {
             'expert_action': expert_action,  # 专家动作（用于BC训练）
@@ -348,13 +367,14 @@ class DataCenterEnv(gym.Env):
             'T_in': next_T_in,               # 机房温度
             'T_out': self.T_out,             # 室外温度
             'IT_load': self.IT_load,         # IT负载
-            'temp_violation': next_T_in < self.T_min or next_T_in > self.T_max,
+            'temp_violation': temp_violation,
             'episode_energy': self._episode_energy,  # 累积能耗
             'episode_violations': self._episode_violations,  # 累积越界次数
             **reward_info  # 奖励分解信息
         }
-        
-        return next_state, reward, done, info
+
+        # 返回 5 个值（符合 Gymnasium API）
+        return next_state, reward, terminated, truncated, info
     
     def _compute_reward(self, T_in: float, energy: float) -> Tuple[float, Dict]:
         """

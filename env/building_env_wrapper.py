@@ -20,6 +20,19 @@ if bear_path not in sys.path:
 from BEAR.Env.env_building import BuildingEnvReal
 from BEAR.Utils.utils_building import ParameterGenerator
 
+# 导入配置常量（修复：统一管理配置参数）
+from env.building_config import (
+    DEFAULT_REWARD_SCALE,
+    DEFAULT_ENERGY_WEIGHT,
+    DEFAULT_TEMP_WEIGHT,
+    DEFAULT_TARGET_TEMP,
+    DEFAULT_TEMP_TOLERANCE,
+    DEFAULT_MAX_POWER,
+    DEFAULT_TIME_RESOLUTION,
+    DEFAULT_VIOLATION_PENALTY,
+    calculate_state_dim,
+)
+
 
 class BearEnvWrapper(gym.Env):
     """
@@ -50,21 +63,22 @@ class BearEnvWrapper(gym.Env):
         building_type: str = 'OfficeSmall',      # 建筑类型
         weather_type: str = 'Hot_Dry',           # 气候类型
         location: str = 'Tucson',                # 地理位置
-        target_temp: float = 22.0,               # 目标温度 (°C)
-        temp_tolerance: float = 2.0,             # 温度容差 (°C)
-        max_power: int = 8000,                   # HVAC 最大功率 (W)
-        time_resolution: int = 3600,             # 时间分辨率 (秒)
-        energy_weight: float = 0.001,            # 能耗权重
-        temp_weight: float = 0.999,              # 温度偏差权重
+        target_temp: float = DEFAULT_TARGET_TEMP,               # 目标温度 (°C)
+        temp_tolerance: float = DEFAULT_TEMP_TOLERANCE,             # 温度容差 (°C)
+        max_power: int = DEFAULT_MAX_POWER,                   # HVAC 最大功率 (W)
+        time_resolution: int = DEFAULT_TIME_RESOLUTION,             # 时间分辨率 (秒)
+        energy_weight: float = DEFAULT_ENERGY_WEIGHT,            # 能耗权重
+        temp_weight: float = DEFAULT_TEMP_WEIGHT,              # 温度偏差权重
         episode_length: Optional[int] = None,    # 回合长度（None表示使用完整年度数据）
         add_violation_penalty: bool = False,     # 是否添加温度越界惩罚
-        violation_penalty: float = 100.0,        # 越界惩罚系数
+        violation_penalty: float = DEFAULT_VIOLATION_PENALTY,        # 越界惩罚系数
+        reward_scale: float = DEFAULT_REWARD_SCALE,               # 奖励缩放系数（降低奖励尺度）
         expert_type: Optional[str] = None,       # 专家控制器类型（第二阶段实现）
         **kwargs                                 # 其他传递给 ParameterGenerator 的参数
     ):
         """
         初始化 BEAR 环境适配器
-        
+
         参数：
         - building_type: 建筑类型，可选值见 BEAR 文档
         - weather_type: 气候类型，可选值见 BEAR 文档
@@ -78,6 +92,7 @@ class BearEnvWrapper(gym.Env):
         - episode_length: 回合长度，None 表示使用完整数据
         - add_violation_penalty: 是否添加温度越界惩罚
         - violation_penalty: 越界惩罚系数
+        - reward_scale: 奖励缩放系数，默认0.1（将奖励缩小10倍，稳定训练）
         - expert_type: 专家控制器类型（'mpc', 'pid', 'rule_based'）
         """
         super(BearEnvWrapper, self).__init__()
@@ -95,6 +110,7 @@ class BearEnvWrapper(gym.Env):
         self.episode_length = episode_length
         self.add_violation_penalty = add_violation_penalty
         self.violation_penalty = violation_penalty
+        self.reward_scale = reward_scale  # 奖励缩放系数
         self.expert_type = expert_type
         
         # ========== 生成 BEAR 环境参数 ==========
@@ -135,17 +151,20 @@ class BearEnvWrapper(gym.Env):
         # ========== 适配状态空间 ==========
         self.observation_space = self._adapt_observation_space()
 
-        # ========== 验证状态维度 ==========
+        # ========== 验证状态维度（修复：使用显式异常而非断言） ==========
         # 检查实际的observation_space维度是否与计算的state_dim一致
         actual_obs_dim = self.observation_space.shape[0]
+
+        # 修复：使用显式异常确保维度一致（断言在优化模式下会被禁用）
         if actual_obs_dim != self.state_dim:
-            print(f"⚠️  警告: 状态维度不一致!")
-            print(f"   计算的state_dim: {self.state_dim} (3*{self.roomnum}+2)")
-            print(f"   实际obs_space维度: {actual_obs_dim}")
-            print(f"   将使用实际维度: {actual_obs_dim}")
-            self.state_dim = actual_obs_dim
-        else:
-            print(f"✓ 状态维度验证通过: {self.state_dim} (3*{self.roomnum}+2)")
+            raise ValueError(
+                f"状态维度不一致! "
+                f"计算的state_dim: {self.state_dim} (3*{self.roomnum}+2), "
+                f"实际obs_space维度: {actual_obs_dim}. "
+                f"请检查 BEAR 环境配置或状态维度计算公式。"
+            )
+
+        print(f"✓ 状态维度验证通过: {self.state_dim} (3*{self.roomnum}+2)")
         
         # ========== 适配动作空间 ==========
         self.action_space = self._adapt_action_space()
@@ -251,53 +270,58 @@ class BearEnvWrapper(gym.Env):
         return dropt_action.astype(np.float32)
     
     def _adapt_reward(
-        self, 
-        bear_reward: float, 
-        state: np.ndarray, 
+        self,
+        bear_reward: float,
+        state: np.ndarray,
         info: Dict[str, Any]
     ) -> float:
         """
         适配奖励函数
-        
+
         参数：
         - bear_reward: BEAR 环境返回的奖励
         - state: 当前状态
         - info: 环境信息字典
-        
+
         返回：
         - float: 适配后的奖励
         """
         reward = bear_reward
-        
+
         # 可选：添加温度越界惩罚
         if self.add_violation_penalty:
             zone_temps = info.get('zone_temperature', state[:self.roomnum])
             target = self.target_temp
             tolerance = self.temp_tolerance
-            
+
             # 计算越界惩罚
             violation_count = 0
             for temp in zone_temps:
                 if temp < target - tolerance or temp > target + tolerance:
                     violation_count += 1
-            
+
             if violation_count > 0:
                 reward -= self.violation_penalty * violation_count
-        
+
+        # ========== 奖励缩放 ==========
+        # 将奖励缩放到更小的范围，降低Q值和损失的尺度
+        # 例如: reward_scale=0.1 将奖励缩小10倍
+        reward = reward * self.reward_scale
+
         return reward
     
     def reset(
-        self, 
-        seed: Optional[int] = None, 
+        self,
+        seed: Optional[int] = None,
         options: Optional[Dict[str, Any]] = None
     ) -> Tuple[np.ndarray, Dict[str, Any]]:
         """
         重置环境
-        
+
         参数：
         - seed: 随机种子
         - options: 重置选项
-        
+
         返回：
         - state: 初始状态
         - info: 环境信息
@@ -311,6 +335,10 @@ class BearEnvWrapper(gym.Env):
         # 重置计数器
         self.current_step = 0
         self.total_reward = 0.0
+
+        # 修复：重置专家控制器状态（避免上一个episode的状态影响下一个episode）
+        if self.expert_controller is not None:
+            self.expert_controller.reset()
 
         # 返回空的info字典以兼容Tianshou
         info = {}
@@ -369,8 +397,11 @@ class BearEnvWrapper(gym.Env):
             try:
                 expert_action = self.expert_controller.get_action(state)
                 info['expert_action'] = expert_action
-            except Exception as e:
+            except (ValueError, RuntimeError, np.linalg.LinAlgError) as e:
+                # 修复：只捕获预期的异常类型，避免隐藏严重错误
                 print(f"警告：获取专家动作失败: {e}")
+                # 使用零动作作为备用（保守策略）
+                info['expert_action'] = np.zeros(self.action_dim, dtype=np.float32)
         
         return state, reward, done, truncated, info
     
@@ -401,7 +432,7 @@ def make_building_env(
 ) -> Tuple[BearEnvWrapper, Any, Any]:
     """
     创建建筑环境（兼容 DROPT 接口）
-    
+
     参数：
     - building_type: 建筑类型
     - weather_type: 气候类型
@@ -409,41 +440,31 @@ def make_building_env(
     - training_num: 训练环境数量
     - test_num: 测试环境数量
     - **kwargs: 传递给 BearEnvWrapper 的其他参数
-    
+
     返回：
     - env: 单个环境实例
     - train_envs: 训练环境向量
     - test_envs: 测试环境向量
     """
     from tianshou.env import DummyVectorEnv
-    
+
+    # 修复：定义环境工厂函数，避免 lambda 闭包共享可变对象的潜在风险
+    def env_factory():
+        return BearEnvWrapper(
+            building_type=building_type,
+            weather_type=weather_type,
+            location=location,
+            **kwargs
+        )
+
     # 创建单个环境实例
-    env = BearEnvWrapper(
-        building_type=building_type,
-        weather_type=weather_type,
-        location=location,
-        **kwargs
-    )
-    
+    env = env_factory()
+
     # 创建训练环境向量
-    train_envs = DummyVectorEnv([
-        lambda: BearEnvWrapper(
-            building_type=building_type,
-            weather_type=weather_type,
-            location=location,
-            **kwargs
-        ) for _ in range(training_num)
-    ])
-    
+    train_envs = DummyVectorEnv([env_factory for _ in range(training_num)])
+
     # 创建测试环境向量
-    test_envs = DummyVectorEnv([
-        lambda: BearEnvWrapper(
-            building_type=building_type,
-            weather_type=weather_type,
-            location=location,
-            **kwargs
-        ) for _ in range(test_num)
-    ])
-    
+    test_envs = DummyVectorEnv([env_factory for _ in range(test_num)])
+
     return env, train_envs, test_envs
 

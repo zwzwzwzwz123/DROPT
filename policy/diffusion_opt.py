@@ -19,6 +19,46 @@ from .helpers import (
 )
 
 
+def check_numerical_stability(tensor: torch.Tensor, name: str, raise_error: bool = False) -> bool:
+    """
+    检查张量的数值稳定性
+
+    参数:
+    - tensor: 要检查的张量
+    - name: 张量名称(用于错误信息)
+    - raise_error: 是否抛出异常(False时仅警告)
+
+    返回:
+    - is_valid: 是否数值稳定
+    """
+    has_nan = torch.isnan(tensor).any().item()
+    has_inf = torch.isinf(tensor).any().item()
+
+    if has_nan or has_inf:
+        # 计算有效值的统计信息
+        valid_mask = ~torch.isnan(tensor) & ~torch.isinf(tensor)
+        if valid_mask.any():
+            valid_tensor = tensor[valid_mask]
+            error_msg = f"⚠️ [数值不稳定] {name}: "
+            if has_nan:
+                error_msg += f"包含NaN (数量: {torch.isnan(tensor).sum().item()}) "
+            if has_inf:
+                error_msg += f"包含Inf (数量: {torch.isinf(tensor).sum().item()}) "
+            error_msg += f"| 有效值统计: min={valid_tensor.min().item():.4f}, "
+            error_msg += f"max={valid_tensor.max().item():.4f}, "
+            error_msg += f"mean={valid_tensor.mean().item():.4f}"
+        else:
+            error_msg = f"⚠️ [数值不稳定] {name}: 全部为NaN或Inf!"
+
+        if raise_error:
+            raise ValueError(error_msg)
+        else:
+            print(error_msg)
+            return False
+
+    return True
+
+
 class DiffusionOPT(BasePolicy):
     """
     扩散优化策略类
@@ -59,11 +99,15 @@ class DiffusionOPT(BasePolicy):
             lr_maxt: int = 1000,
             bc_coef: bool = False,
             exploration_noise: float = 0.1,
+            exploration_decay: bool = True,
+            exploration_decay_steps: int = 100000,
+            exploration_initial_rate: float = 0.3,
+            exploration_final_rate: float = 0.01,
             **kwargs: Any
     ) -> None:
         """
         初始化扩散优化策略
-        
+
         参数说明：
         - state_dim: 状态维度
         - actor: Actor网络（扩散模型）
@@ -80,6 +124,10 @@ class DiffusionOPT(BasePolicy):
         - lr_maxt: 学习率衰减的最大步数
         - bc_coef: 训练模式标志
         - exploration_noise: 探索噪声标准差
+        - exploration_decay: 是否启用探索率衰减
+        - exploration_decay_steps: 探索率衰减步数
+        - exploration_initial_rate: 初始探索率
+        - exploration_final_rate: 最终探索率
         """
         super().__init__(**kwargs)
         # 参数检查
@@ -116,6 +164,18 @@ class DiffusionOPT(BasePolicy):
         self._bc_coef = bc_coef  # 训练模式标志
         self._device = device  # 计算设备
         self.noise_generator = GaussianNoise(sigma=exploration_noise)  # 噪声生成器
+
+        # ========== 探索策略 ==========
+        if exploration_decay and not bc_coef:
+            self.exploration_scheduler = ExplorationScheduler(
+                initial_rate=exploration_initial_rate,
+                final_rate=exploration_final_rate,
+                decay_steps=exploration_decay_steps,
+                decay_type='exponential'
+            )
+            print(f"✓ 启用探索率衰减: {exploration_initial_rate} → {exploration_final_rate} (over {exploration_decay_steps} steps)")
+        else:
+            self.exploration_scheduler = None
 
     def _target_q(self, buffer: ReplayBuffer, indices: np.ndarray) -> torch.Tensor:
         """
@@ -176,39 +236,44 @@ class DiffusionOPT(BasePolicy):
     ) -> Dict[str, Any]:
         """
         更新策略网络
-        
+
         标准的off-policy更新流程：
         1. 从经验回放缓冲区采样
         2. 计算N步回报
         3. 更新Critic和Actor
         4. 更新目标网络
-        5. （可选）调整学习率
-        
+        5. （可选）调整学习率和探索率
+
         参数：
         - sample_size: 批次大小
         - buffer: 经验回放缓冲区
-        
+
         返回：
         - result: 损失等训练信息
         """
         # 检查缓冲区
-        if buffer is None: 
+        if buffer is None:
             return {}
-        
+
         self.updating = True  # 标记正在更新
 
         # ========== 采样和处理数据 ==========
         batch, indices = buffer.sample(sample_size)
         batch = self.process_fn(batch, buffer, indices)
-        
+
         # ========== 更新网络 ==========
         result = self.learn(batch, **kwargs)
-        
+
         # ========== 学习率衰减 ==========
         if self._lr_decay:
             self._actor_lr_scheduler.step()
             self._critic_lr_scheduler.step()
-        
+
+        # ========== 更新探索率 ==========
+        if self.exploration_scheduler is not None:
+            self.exploration_scheduler.step()
+            result['exploration_rate'] = self.exploration_scheduler.get_rate()
+
         self.updating = False  # 更新完成
         return result
 
@@ -250,8 +315,13 @@ class DiffusionOPT(BasePolicy):
             # 行为克隆模式：直接使用输出
             acts = logits
         else:
-            # 策略梯度模式：10%概率添加噪声探索
-            if np.random.rand() < 0.1:
+            # 策略梯度模式：根据探索率添加噪声
+            if self.exploration_scheduler is not None:
+                exploration_rate = self.exploration_scheduler.get_rate()
+            else:
+                exploration_rate = 0.1  # 固定探索率
+
+            if np.random.rand() < exploration_rate:
                 noise = to_torch(self.noise_generator.generate(logits.shape),
                                  dtype=torch.float32, device=self._device)
                 acts = logits + noise
@@ -277,40 +347,83 @@ class DiffusionOPT(BasePolicy):
                        for i in range(batch_size)]
         return np.concatenate(one_hot_res, axis=0)
 
-    def _update_critic(self, batch: Batch) -> torch.Tensor:
+    def _update_critic(self, batch: Batch) -> tuple:
         """
         更新Critic网络
-        
+
         目标：最小化TD误差
         Loss = ||Q(s,a) - target_q||²
-        
+
         双Q网络同时更新，取最小值用于Actor更新
-        
+
         参数：
         - batch: 训练批次
-        
+
         返回：
         - critic_loss: Critic损失
+        - critic_grad_norm: Critic梯度范数
+        - q_stats: Q值统计信息
         """
         # 转换为张量
         obs_ = to_torch(batch.obs, device=self._device, dtype=torch.float32)
         acts_ = to_torch(batch.act, device=self._device, dtype=torch.float32)
-        
+
         # 目标Q值（N步回报）
         target_q = batch.returns
-        
+
+        # ========== 数值稳定性检测 ==========
+        check_numerical_stability(obs_, "Critic输入状态", raise_error=False)
+        check_numerical_stability(acts_, "Critic输入动作", raise_error=False)
+        check_numerical_stability(target_q, "目标Q值", raise_error=False)
+
         # 当前Q值（双Q网络）
         current_q1, current_q2 = self._critic(obs_, acts_)
-        
+
+        # ========== 检测Q值 ==========
+        check_numerical_stability(current_q1, "当前Q1值", raise_error=False)
+        check_numerical_stability(current_q2, "当前Q2值", raise_error=False)
+
         # 计算MSE损失（两个Q网络的损失之和）
         critic_loss = F.mse_loss(current_q1, target_q) + F.mse_loss(current_q2, target_q)
+
+        # ========== 检测损失 ==========
+        check_numerical_stability(critic_loss, "Critic损失", raise_error=True)
 
         # 优化Critic
         self._critic_optim.zero_grad()
         critic_loss.backward()
+
+        # ========== 梯度裁剪 ==========
+        critic_grad_norm = torch.nn.utils.clip_grad_norm_(
+            self._critic.parameters(),
+            max_norm=1.0
+        )
+
+        # 检测梯度爆炸
+        if critic_grad_norm > 10.0:
+            print(f"⚠️ Critic梯度过大: {critic_grad_norm:.2f}, 已裁剪到1.0")
+
         self._critic_optim.step()
-        
-        return critic_loss
+
+        # ========== 收集Q值统计信息 ==========
+        with torch.no_grad():
+            q_mean = (current_q1.mean() + current_q2.mean()) / 2
+            q_std = (current_q1.std() + current_q2.std()) / 2
+            q_min = torch.min(current_q1.min(), current_q2.min())
+            q_max = torch.max(current_q1.max(), current_q2.max())
+            td_error = torch.abs(current_q1 - target_q).mean()
+
+            q_stats = {
+                'q_mean': q_mean.item(),
+                'q_std': q_std.item(),
+                'q_min': q_min.item(),
+                'q_max': q_max.item(),
+                'td_error': td_error.item(),
+                'target_q_mean': target_q.mean().item(),
+                'target_q_std': target_q.std().item(),
+            }
+
+        return critic_loss, critic_grad_norm, q_stats
 
 
     def _update_bc(self, batch: Batch, update: bool = False) -> torch.Tensor:
@@ -390,25 +503,25 @@ class DiffusionOPT(BasePolicy):
             self,
             batch: Batch,
             **kwargs: Any
-    ) -> Dict[str, List[float]]:
+    ) -> Dict[str, Any]:
         """
         策略学习的核心函数
-        
+
         完整的更新流程：
         1. 更新Critic（TD学习）
         2. 更新Actor（行为克隆或策略梯度）
         3. 软更新目标网络
-        
+
         参数：
         - batch: 训练批次
-        
+
         返回：
-        - dict: 包含损失信息的字典
+        - dict: 包含详细训练信息的字典
         """
         # ========== 步骤1：更新Critic ==========
         # 最小化TD误差
-        critic_loss = self._update_critic(batch)
-        
+        critic_loss, critic_grad_norm, q_stats = self._update_critic(batch)
+
         # ========== 步骤2：更新Actor ==========
         if self._bc_coef:
             # 有专家数据：使用行为克隆
@@ -419,32 +532,137 @@ class DiffusionOPT(BasePolicy):
             pg_loss = self._update_policy(batch, update=False)
             overall_loss = pg_loss
 
+        # ========== 检测Actor损失 ==========
+        check_numerical_stability(overall_loss, "Actor损失", raise_error=True)
+
         # 执行Actor更新
         self._actor_optim.zero_grad()
         overall_loss.backward()
+
+        # ========== Actor梯度裁剪 ==========
+        actor_grad_norm = torch.nn.utils.clip_grad_norm_(
+            self._actor.parameters(),
+            max_norm=1.0
+        )
+
+        # 检测梯度爆炸
+        if actor_grad_norm > 10.0:
+            print(f"⚠️ Actor梯度过大: {actor_grad_norm:.2f}, 已裁剪到1.0")
+
         self._actor_optim.step()
 
         # ========== 步骤3：软更新目标网络 ==========
         self._update_targets()
-        
-        # 返回训练信息
-        return {
+
+        # ========== 收集动作统计信息 ==========
+        with torch.no_grad():
+            obs_ = to_torch(batch.obs, device=self._device, dtype=torch.float32)
+            acts_ = to_torch(batch.act, device=self._device, dtype=torch.float32)
+
+            action_stats = {
+                'action_mean': acts_.mean().item(),
+                'action_std': acts_.std().item(),
+                'action_min': acts_.min().item(),
+                'action_max': acts_.max().item(),
+            }
+
+        # ========== 返回详细训练信息 ==========
+        result = {
+            # 损失
             'loss/critic': critic_loss.item(),
-            'overall_loss': overall_loss.item()
+            'loss/actor': overall_loss.item(),
+
+            # 梯度范数
+            'grad_norm/critic': critic_grad_norm.item(),
+            'grad_norm/actor': actor_grad_norm.item(),
         }
+
+        # 合并Q值统计
+        result.update({f'q_value/{k}': v for k, v in q_stats.items()})
+
+        # 合并动作统计
+        result.update({f'action/{k}': v for k, v in action_stats.items()})
+
+        # 警告：检测训练异常
+        if critic_loss.item() > 1000:
+            print(f"⚠️ 警告: Critic损失过高 ({critic_loss.item():.2f}), 训练可能不稳定!")
+
+        if abs(q_stats['q_mean']) > 1000:
+            print(f"⚠️ 警告: Q值过大 ({q_stats['q_mean']:.2f}), 可能存在数值问题!")
+
+        return result
+
+
+class ExplorationScheduler:
+    """
+    探索率调度器
+
+    支持多种衰减策略:
+    - linear: 线性衰减
+    - exponential: 指数衰减
+    - cosine: 余弦衰减
+    """
+
+    def __init__(
+        self,
+        initial_rate: float = 0.3,
+        final_rate: float = 0.01,
+        decay_steps: int = 100000,
+        decay_type: str = 'exponential'
+    ):
+        """
+        初始化探索调度器
+
+        参数:
+        - initial_rate: 初始探索率
+        - final_rate: 最终探索率
+        - decay_steps: 衰减步数
+        - decay_type: 衰减类型 ('linear', 'exponential', 'cosine')
+        """
+        self.initial_rate = initial_rate
+        self.final_rate = final_rate
+        self.decay_steps = decay_steps
+        self.decay_type = decay_type
+        self.current_step = 0
+
+    def get_rate(self) -> float:
+        """获取当前探索率"""
+        if self.current_step >= self.decay_steps:
+            return self.final_rate
+
+        progress = self.current_step / self.decay_steps
+
+        if self.decay_type == 'linear':
+            rate = self.initial_rate - (self.initial_rate - self.final_rate) * progress
+        elif self.decay_type == 'exponential':
+            rate = self.final_rate + (self.initial_rate - self.final_rate) * (0.995 ** self.current_step)
+        elif self.decay_type == 'cosine':
+            rate = self.final_rate + 0.5 * (self.initial_rate - self.final_rate) * (1 + np.cos(np.pi * progress))
+        else:
+            raise ValueError(f"未知的衰减类型: {self.decay_type}")
+
+        return max(rate, self.final_rate)
+
+    def step(self):
+        """更新步数"""
+        self.current_step += 1
+
+    def reset(self):
+        """重置"""
+        self.current_step = 0
 
 
 class GaussianNoise:
     """
     高斯噪声生成器
-    
+
     用于探索：在动作上添加随机噪声
     """
 
     def __init__(self, mu=0.0, sigma=0.1):
         """
         初始化噪声生成器
-        
+
         参数：
         - mu: 均值（通常为0）
         - sigma: 标准差（控制探索程度）
@@ -455,10 +673,10 @@ class GaussianNoise:
     def generate(self, shape):
         """
         生成高斯噪声
-        
+
         参数：
         - shape: 噪声形状（通常与动作形状相同）
-        
+
         返回：
         - noise: 高斯噪声数组
         """
