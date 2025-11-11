@@ -93,12 +93,16 @@ celerybeat.pid
 # Environments
 .env
 .venv
-env/
+# env/  # ❌ 注释掉！这会忽略项目的 env/ 源代码目录
 venv/
-ENV/
+# ENV/  # ❌ 注释掉！Windows 不区分大小写，会匹配 env/
 env.bak/
 venv.bak/
 .conda/
+
+# 只忽略根目录下的虚拟环境目录（如果需要）
+# /env_virtual/
+# /venv_*/
 
 # Spyder project settings
 .spyderproject
