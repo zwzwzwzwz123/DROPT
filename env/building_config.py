@@ -12,9 +12,9 @@ BEAR 建筑环境配置常量
 # - 0.01: 推荐配置,奖励适中 (约-640) ⭐
 # - 0.001: 激进配置,奖励较小 (约-64)
 # 根据当前训练,Q值约-7,但原始奖励-64000,建议增加缩放到0.01
-DEFAULT_REWARD_SCALE = 0.01  # 奖励缩放因子（将奖励缩小100倍，稳定训练）
-DEFAULT_ENERGY_WEIGHT = 0.001  # 能耗权重 α
-DEFAULT_TEMP_WEIGHT = 0.999  # 温度偏差权重 β
+DEFAULT_REWARD_SCALE = 0.0001  # 奖励缩放因子（将奖励缩小100倍，稳定训练）
+DEFAULT_ENERGY_WEIGHT = 0.1  # 能耗权重 α
+DEFAULT_TEMP_WEIGHT = 0.9  # 温度偏差权重 β
 DEFAULT_VIOLATION_PENALTY = 100.0  # 温度越界惩罚系数 γ
 
 # ========== 环境配置 ==========
