@@ -23,6 +23,9 @@ from policy import DiffusionOPT
 from diffusion import Diffusion
 from diffusion.model import MLP, DoubleCritic
 
+# 导入日志格式化工具
+from utils.logger_formatter import EnhancedTensorboardLogger
+
 warnings.filterwarnings('ignore')
 
 
@@ -227,10 +230,20 @@ def main(args=None):
     log_path = os.path.join(args.logdir, args.log_prefix, log_name, time_now)
     writer = SummaryWriter(log_path)
     writer.add_text("args", str(args))
-    logger = TensorboardLogger(writer)
-    
+
+    # 创建增强的日志记录器（美化终端输出）
+    logger = EnhancedTensorboardLogger(
+        writer=writer,
+        total_epochs=args.epoch,
+        reward_scale=args.reward_scale,
+        log_interval=1,  # 每个epoch都输出（可改为10表示每10个epoch输出一次）
+        verbose=True,  # True=详细格式，False=紧凑格式
+        diffusion_steps=args.diffusion_steps  # 扩散模型步数
+    )
+
     print(f"  ✓ 日志路径: {log_path}")
     print(f"  ✓ TensorBoard: tensorboard --logdir={log_path}")
+    print(f"  ✓ 日志输出已优化，关键指标将清晰显示")
     
     # ========== 定义策略 ==========
     print("\n[5/6] 初始化DiffusionOPT策略...")

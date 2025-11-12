@@ -17,6 +17,8 @@ import warnings
 
 # 导入建筑环境
 from env.building_env_wrapper import make_building_env
+# 导入日志格式化工具
+from utils.logger_formatter import EnhancedTensorboardLogger
 # 导入配置常量（修复：统一管理配置参数，避免硬编码）
 from env.building_config import (
     DEFAULT_REWARD_SCALE,
@@ -174,9 +176,16 @@ def main():
     log_path = os.path.join(args.logdir, log_name)
     os.makedirs(log_path, exist_ok=True)
     
-    # 创建 TensorBoard writer
+    # 创建 TensorBoard writer 和增强的日志记录器
     writer = SummaryWriter(log_path)
-    logger = TensorboardLogger(writer)
+    logger = EnhancedTensorboardLogger(
+        writer=writer,
+        total_epochs=args.epoch,
+        reward_scale=args.reward_scale,
+        log_interval=1,  # 每个epoch都输出（可改为10表示每10个epoch输出一次）
+        verbose=True,  # True=详细格式，False=紧凑格式
+        diffusion_steps=args.diffusion_steps  # 扩散模型步数
+    )
     
     # 打印配置
     print("\n" + "=" * 60)
@@ -313,9 +322,10 @@ def main():
     print("  开始训练")
     print("=" * 60)
     print(f"\n⚠️ 注意: 奖励已缩放 {args.reward_scale}x")
-    print(f"  - 训练日志显示的是缩放后的奖励")
-    print(f"  - 真实奖励 = 显示奖励 / {args.reward_scale}")
-    print(f"  - 例如: test_reward=-20000 → 真实奖励=-200000\n")
+    print(f"\n💡 提示: 日志输出已优化，关键指标将清晰显示")
+    print(f"  - 每个epoch都会显示详细的训练指标")
+    print(f"  - 异常值会用 ⚠ 符号标记")
+    print(f"  - 时间统计会自动估算剩余训练时间\n")
 
     result = offpolicy_trainer(
         policy=policy,
