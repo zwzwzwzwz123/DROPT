@@ -12,7 +12,7 @@ BEAR 建筑环境配置常量
 # - 0.01: 推荐配置,奖励适中 (约-640) ⭐
 # - 0.001: 激进配置,奖励较小 (约-64)
 # 根据当前训练,Q值约-7,但原始奖励-64000,建议增加缩放到0.01
-DEFAULT_REWARD_SCALE = 0.0001  # 奖励缩放因子（将奖励缩小100倍，稳定训练）
+DEFAULT_REWARD_SCALE = 0.01  # 奖励缩放因子（将奖励缩小100倍，稳定训练）
 DEFAULT_ENERGY_WEIGHT = 0.1  # 能耗权重 α
 DEFAULT_TEMP_WEIGHT = 0.9  # 温度偏差权重 β
 DEFAULT_VIOLATION_PENALTY = 100.0  # 温度越界惩罚系数 γ
@@ -56,7 +56,7 @@ DEFAULT_N_STEP = 3  # 默认 N 步 TD 学习
 # - 15步: 高质量但较慢
 # - 20+步: 最佳质量但不适合实时控制
 # 根据DDIM研究,10步的生成质量是5步的2-3倍,推理时间仅增加1倍
-DEFAULT_DIFFUSION_STEPS = 20  # 默认扩散步数 (从5增加到10以提升生成质量)
+DEFAULT_DIFFUSION_STEPS = 10  # 默认扩散步数 (从5增加到10以提升生成质量)
 DEFAULT_BETA_SCHEDULE = 'vp'  # 默认噪声调度类型
 DEFAULT_HIDDEN_DIM = 256  # 默认 MLP 隐藏层维度
 DEFAULT_ACTOR_LR = 3e-4  # 默认 Actor 学习率

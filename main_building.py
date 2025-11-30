@@ -105,7 +105,7 @@ def get_args():
                         help=f'经验回放缓冲区大小 (默认{DEFAULT_BUFFER_SIZE:,})')
     parser.add_argument('-e', '--epoch', type=int, default=50000,
                         help='总训练轮次')
-    parser.add_argument('--step-per-epoch', type=int, default=1,
+    parser.add_argument('--step-per-epoch', type=int, default=5000,
                         help='每个训练轮次的步数')
     parser.add_argument('--step-per-collect', type=int, default=1,
                         help='每次收集的步数')
