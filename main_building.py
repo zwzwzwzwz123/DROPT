@@ -29,12 +29,16 @@ from env.building_config import (
     DEFAULT_TEMP_TOLERANCE,
     DEFAULT_MAX_POWER,
     DEFAULT_TIME_RESOLUTION,
+    DEFAULT_EPISODE_LENGTH,
     DEFAULT_TRAINING_NUM,
     DEFAULT_TEST_NUM,
     DEFAULT_BUFFER_SIZE,
     DEFAULT_BATCH_SIZE,
     DEFAULT_GAMMA,
     DEFAULT_N_STEP,
+    DEFAULT_STEP_PER_EPOCH,
+    DEFAULT_STEP_PER_COLLECT,
+    DEFAULT_EPISODE_PER_TEST,
     DEFAULT_DIFFUSION_STEPS,
     DEFAULT_BETA_SCHEDULE,
     DEFAULT_HIDDEN_DIM,
@@ -74,8 +78,10 @@ def get_args():
                         help=f'HVAC 最大功率 (W，默认{DEFAULT_MAX_POWER})')
     parser.add_argument('--time-resolution', type=int, default=DEFAULT_TIME_RESOLUTION,
                         help=f'时间分辨率 (秒，默认{DEFAULT_TIME_RESOLUTION}=1小时)')
-    parser.add_argument('--episode-length', type=int, default=None,
-                        help='回合长度（步数，None表示完整年度）')
+    parser.add_argument('--episode-length', type=int, default=DEFAULT_EPISODE_LENGTH,
+                        help='Episode horizon in steps (default ~1 week)')
+    parser.add_argument('--full-episode', action='store_true', default=False,
+                        help='Override to use the full-year trajectory (sets episode-length=None)')
     parser.add_argument('--energy-weight', type=float, default=DEFAULT_ENERGY_WEIGHT,
                         help=f'能耗权重 α (默认{DEFAULT_ENERGY_WEIGHT})')
     parser.add_argument('--temp-weight', type=float, default=DEFAULT_TEMP_WEIGHT,
@@ -105,10 +111,10 @@ def get_args():
                         help=f'经验回放缓冲区大小 (默认{DEFAULT_BUFFER_SIZE:,})')
     parser.add_argument('-e', '--epoch', type=int, default=50000,
                         help='总训练轮次')
-    parser.add_argument('--step-per-epoch', type=int, default=5000,
-                        help='每个训练轮次的步数')
-    parser.add_argument('--step-per-collect', type=int, default=1,
-                        help='每次收集的步数')
+    parser.add_argument('--step-per-epoch', type=int, default=DEFAULT_STEP_PER_EPOCH,
+                        help='Environment steps collected per epoch (match episode length * env count)')
+    parser.add_argument('--step-per-collect', type=int, default=DEFAULT_STEP_PER_COLLECT,
+                        help='Steps per data collection phase before each round of updates')
     parser.add_argument('-b', '--batch-size', type=int, default=DEFAULT_BATCH_SIZE,
                         help=f'批次大小 (默认{DEFAULT_BATCH_SIZE})')
     parser.add_argument('--wd', type=float, default=1e-4,
@@ -121,6 +127,8 @@ def get_args():
                         help=f'并行训练环境数量 (默认{DEFAULT_TRAINING_NUM})')
     parser.add_argument('--test-num', type=int, default=DEFAULT_TEST_NUM,
                         help=f'并行测试环境数量 (默认{DEFAULT_TEST_NUM})')
+    parser.add_argument('--episode-per-test', type=int, default=DEFAULT_EPISODE_PER_TEST,
+                        help='每次评估所跑的episode数量（减少可缩短每轮评估时间）')
 
     # ========== 网络架构参数（使用配置常量作为默认值） ==========
     parser.add_argument('--hidden-dim', type=int, default=DEFAULT_HIDDEN_DIM,
@@ -130,7 +138,12 @@ def get_args():
     parser.add_argument('--critic-lr', type=float, default=DEFAULT_CRITIC_LR,
                         help=f'Critic学习率 (默认{DEFAULT_CRITIC_LR})')
     parser.add_argument('--reward-scale', type=float, default=DEFAULT_REWARD_SCALE,
-                        help=f'奖励缩放系数（降低奖励尺度，稳定训练，默认{DEFAULT_REWARD_SCALE}）')
+                        help='Scale raw rewards to stabilize critic/actor updates')
+    parser.add_argument('--reward-normalization', dest='reward_normalization', action='store_true',
+                        help='Enable Tianshou reward normalization (default)')
+    parser.add_argument('--no-reward-normalization', dest='reward_normalization', action='store_false',
+                        help='Disable reward normalization for legacy behavior')
+    parser.set_defaults(reward_normalization=True)
 
     # ========== 扩散模型参数（使用配置常量作为默认值） ==========
     parser.add_argument('--diffusion-steps', type=int, default=DEFAULT_DIFFUSION_STEPS,
@@ -155,6 +168,14 @@ def get_args():
                         help=f'模型保存间隔（轮次，默认{DEFAULT_SAVE_INTERVAL}）')
     
     args = parser.parse_args()
+
+    if args.full_episode:
+        args.episode_length = None
+
+    if args.reward_normalization and args.n_step > 1:
+        print("⚠️  提示: n_step>1 与奖励归一化不兼容，已自动关闭 reward_normalization")
+        args.reward_normalization = False
+
     return args
 
 
@@ -292,7 +313,7 @@ def main():
         estimation_step=args.n_step,
         lr_decay=args.lr_decay,
         lr_maxt=args.epoch,
-        reward_normalization=False,  # Tianshou不支持N步回报+奖励归一化
+        reward_normalization=args.reward_normalization,
     )
     
     print(f"✓ 策略创建成功")
@@ -334,7 +355,7 @@ def main():
         max_epoch=args.epoch,
         step_per_epoch=args.step_per_epoch,
         step_per_collect=args.step_per_collect,
-        episode_per_test=args.test_num,
+        episode_per_test=args.episode_per_test,
         batch_size=args.batch_size,
         update_per_step=1.0,
         test_in_train=False,
