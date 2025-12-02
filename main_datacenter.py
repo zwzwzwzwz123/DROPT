@@ -71,6 +71,8 @@ def get_args():
                         help='每个训练轮次的步数')
     parser.add_argument('--step-per-collect', type=int, default=1,
                         help='每次收集的步数')
+    parser.add_argument('--update-per-step', type=float, default=1.0,
+                        help='每个环境步的参数更新次数 (≤1 可降低计算)')
     parser.add_argument('-b', '--batch-size', type=int, default=256,
                         help='批次大小')
     parser.add_argument('--wd', type=float, default=1e-4,
@@ -83,6 +85,11 @@ def get_args():
                         help='并行训练环境数量')
     parser.add_argument('--test-num', type=int, default=2,
                         help='并行测试环境数量')
+    parser.add_argument('--episode-per-test', type=int, default=1,
+                        help='评估时运行的episode数量')
+    parser.add_argument('--vector-env-type', type=str, default='dummy',
+                        choices=['dummy', 'subproc'],
+                        help='向量环境实现方式')
     
     # ========== 网络架构参数 ==========
     parser.add_argument('--hidden-dim', type=int, default=256,
@@ -101,6 +108,10 @@ def get_args():
                         help='观察模式（不训练）')
     parser.add_argument('--lr-decay', action='store_true', default=False,
                         help='是否使用学习率衰减')
+    parser.add_argument('--log-update-interval', type=int, default=50,
+                        help='TensorBoard写入梯度指标的间隔（梯度步）')
+    parser.add_argument('--reward-scale', type=float, default=1.0,
+                        help='用于日志展示的奖励缩放系数')
     
     # ========== 扩散模型参数 ==========
     parser.add_argument('--actor-lr', type=float, default=3e-4,
@@ -118,6 +129,12 @@ def get_args():
     # ========== 训练模式 ==========
     parser.add_argument('--bc-coef', action='store_true', default=False,
                         help='是否使用行为克隆（True=有专家数据）')
+    parser.add_argument('--bc-weight', type=float, default=1.0,
+                        help='行为克隆损失权重（0=忽略BC，1=纯BC）')
+    parser.add_argument('--bc-weight-final', type=float, default=None,
+                        help='BC权重最终值（默认与初始值相同）')
+    parser.add_argument('--bc-weight-decay-steps', type=int, default=0,
+                        help='BC权重线性衰减步数（0表示不衰减）')
     
     # ========== 优先经验回放 ==========
     parser.add_argument('--prioritized-replay', action='store_true', default=False,
@@ -128,6 +145,8 @@ def get_args():
                         help='重要性采样beta')
     
     args = parser.parse_known_args()[0]
+    if args.bc_weight_final is None:
+        args.bc_weight_final = args.bc_weight
     return args
 
 
@@ -154,11 +173,13 @@ def main(args=None):
         'energy_weight': args.energy_weight,
         'temp_weight': args.temp_weight,
         'violation_penalty': args.violation_penalty,
+        'expert_type': args.expert_type,
     }
 
     env, train_envs, test_envs = make_datacenter_env(
         training_num=args.training_num,
         test_num=args.test_num,
+        vector_env_type=args.vector_env_type,
         **env_kwargs
     )
     
@@ -238,7 +259,9 @@ def main(args=None):
         reward_scale=args.reward_scale,
         log_interval=1,  # 每个epoch都输出（可改为10表示每10个epoch输出一次）
         verbose=True,  # True=详细格式，False=紧凑格式
-        diffusion_steps=args.diffusion_steps  # 扩散模型步数
+        diffusion_steps=args.n_timesteps,
+        update_log_interval=args.log_update_interval,
+        step_per_epoch=args.step_per_epoch
     )
 
     print(f"  ✓ 日志路径: {log_path}")
@@ -261,6 +284,9 @@ def main(args=None):
         lr_decay=args.lr_decay,
         lr_maxt=args.epoch,
         bc_coef=args.bc_coef,
+        bc_weight=args.bc_weight,
+        bc_weight_final=args.bc_weight_final,
+        bc_weight_decay_steps=args.bc_weight_decay_steps,
         action_space=env.action_space,
         exploration_noise=args.exploration_noise,
     )
@@ -288,7 +314,12 @@ def main(args=None):
         print(f"  ✓ 使用普通经验回放")
     
     # ========== 设置数据收集器 ==========
-    train_collector = Collector(policy, train_envs, buffer)
+    train_collector = Collector(
+        policy,
+        train_envs,
+        buffer,
+        exploration_noise=True
+    )
     test_collector = Collector(policy, test_envs)
     
     def save_best_fn(policy):
@@ -317,8 +348,9 @@ def main(args=None):
             args.epoch,
             args.step_per_epoch,
             args.step_per_collect,
-            args.test_num,
+            args.episode_per_test,
             args.batch_size,
+            update_per_step=args.update_per_step,
             save_best_fn=save_best_fn,
             logger=logger,
             test_in_train=False

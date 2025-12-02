@@ -12,19 +12,20 @@ BEAR 建筑环境配置常量
 # - 0.01: 推荐配置,奖励适中 (约-640) ⭐
 # - 0.001: 激进配置,奖励较小 (约-64)
 # 根据当前训练,Q值约-7,但原始奖励-64000,建议增加缩放到0.01
-DEFAULT_REWARD_SCALE = 0.0001  # 奖励缩放因子（将奖励缩小100倍，稳定训练）
-DEFAULT_ENERGY_WEIGHT = 0.1  # 能耗权重 α
-DEFAULT_TEMP_WEIGHT = 0.9  # 温度偏差权重 β
+DEFAULT_REWARD_SCALE = 0.001  # 奖励缩放因子（将奖励缩小100倍，稳定训练）
+DEFAULT_ENERGY_WEIGHT = 0.6  # 能耗权重 α（优先节能）
+DEFAULT_TEMP_WEIGHT = 0.4  # 温度偏差权重 β（只需满足温度上限）
 DEFAULT_VIOLATION_PENALTY = 100.0  # 温度越界惩罚系数 γ
 
 # ========== 环境配置 ==========
 DEFAULT_BUILDING_TYPE = 'OfficeSmall'  # 默认建筑类型
 DEFAULT_WEATHER_TYPE = 'Hot_Dry'  # 默认气候类型
 DEFAULT_LOCATION = 'Tucson'  # 默认地理位置
-DEFAULT_TARGET_TEMP = 22.0  # 默认目标温度 (°C)
-DEFAULT_TEMP_TOLERANCE = 2.0  # 默认温度容差 (°C)
+DEFAULT_TARGET_TEMP = 26.0  # 默认目标温度 (°C) —— 控制在28°C上下
+DEFAULT_TEMP_TOLERANCE = 1.0  # 默认温度容差 (°C)，允许轻微波动
 DEFAULT_MAX_POWER = 8000  # 默认 HVAC 最大功率 (W)
-DEFAULT_TIME_RESOLUTION = 3600  # 默认时间分辨率 (秒，1小时)
+DEFAULT_TIME_RESOLUTION = 3600  # time resolution in seconds (1 hour)
+DEFAULT_EPISODE_LENGTH = 24 * 7  # default episode horizon in hours (~1 week)
 
 # ========== 专家控制器配置 ==========
 # PID 控制器默认参数
@@ -47,7 +48,10 @@ DEFAULT_TEST_NUM = 2  # 默认并行测试环境数量
 DEFAULT_BUFFER_SIZE = 1000000  # 默认经验回放缓冲区大小
 DEFAULT_BATCH_SIZE = 256  # 默认批次大小
 DEFAULT_GAMMA = 0.99  # 默认折扣因子
-DEFAULT_N_STEP = 3  # 默认 N 步 TD 学习
+DEFAULT_N_STEP = 3  # default N-step TD
+DEFAULT_STEP_PER_EPOCH = 8192  # env steps per epoch
+DEFAULT_STEP_PER_COLLECT = 2048  # env steps collected each cycle
+DEFAULT_EPISODE_PER_TEST = 1  # test episodes per evaluation
 
 # ========== 扩散模型配置 ==========
 # 扩散步数说明:
@@ -56,7 +60,7 @@ DEFAULT_N_STEP = 3  # 默认 N 步 TD 学习
 # - 15步: 高质量但较慢
 # - 20+步: 最佳质量但不适合实时控制
 # 根据DDIM研究,10步的生成质量是5步的2-3倍,推理时间仅增加1倍
-DEFAULT_DIFFUSION_STEPS = 20  # 默认扩散步数 (从5增加到10以提升生成质量)
+DEFAULT_DIFFUSION_STEPS = 10  # 默认扩散步数 (从5增加到10以提升生成质量)
 DEFAULT_BETA_SCHEDULE = 'vp'  # 默认噪声调度类型
 DEFAULT_HIDDEN_DIM = 256  # 默认 MLP 隐藏层维度
 DEFAULT_ACTOR_LR = 3e-4  # 默认 Actor 学习率
@@ -165,6 +169,7 @@ DEFAULT_CONFIG = {
     'temp_tolerance': DEFAULT_TEMP_TOLERANCE,
     'max_power': DEFAULT_MAX_POWER,
     'time_resolution': DEFAULT_TIME_RESOLUTION,
+    'episode_length': DEFAULT_EPISODE_LENGTH,
     
     # 训练
     'training_num': DEFAULT_TRAINING_NUM,
@@ -173,6 +178,9 @@ DEFAULT_CONFIG = {
     'batch_size': DEFAULT_BATCH_SIZE,
     'gamma': DEFAULT_GAMMA,
     'n_step': DEFAULT_N_STEP,
+    'step_per_epoch': DEFAULT_STEP_PER_EPOCH,
+    'step_per_collect': DEFAULT_STEP_PER_COLLECT,
+    'episode_per_test': DEFAULT_EPISODE_PER_TEST,
     
     # 扩散模型
     'diffusion_steps': DEFAULT_DIFFUSION_STEPS,
