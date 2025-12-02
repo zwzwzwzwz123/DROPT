@@ -13,16 +13,16 @@ BEAR 建筑环境配置常量
 # - 0.001: 激进配置,奖励较小 (约-64)
 # 根据当前训练,Q值约-7,但原始奖励-64000,建议增加缩放到0.01
 DEFAULT_REWARD_SCALE = 0.001  # 奖励缩放因子（将奖励缩小100倍，稳定训练）
-DEFAULT_ENERGY_WEIGHT = 0.1  # 能耗权重 α
-DEFAULT_TEMP_WEIGHT = 0.9  # 温度偏差权重 β
+DEFAULT_ENERGY_WEIGHT = 0.6  # 能耗权重 α（优先节能）
+DEFAULT_TEMP_WEIGHT = 0.4  # 温度偏差权重 β（只需满足温度上限）
 DEFAULT_VIOLATION_PENALTY = 100.0  # 温度越界惩罚系数 γ
 
 # ========== 环境配置 ==========
 DEFAULT_BUILDING_TYPE = 'OfficeSmall'  # 默认建筑类型
 DEFAULT_WEATHER_TYPE = 'Hot_Dry'  # 默认气候类型
 DEFAULT_LOCATION = 'Tucson'  # 默认地理位置
-DEFAULT_TARGET_TEMP = 22.0  # 默认目标温度 (°C)
-DEFAULT_TEMP_TOLERANCE = 2.0  # 默认温度容差 (°C)
+DEFAULT_TARGET_TEMP = 26.0  # 默认目标温度 (°C) —— 控制在28°C上下
+DEFAULT_TEMP_TOLERANCE = 1.0  # 默认温度容差 (°C)，允许轻微波动
 DEFAULT_MAX_POWER = 8000  # 默认 HVAC 最大功率 (W)
 DEFAULT_TIME_RESOLUTION = 3600  # time resolution in seconds (1 hour)
 DEFAULT_EPISODE_LENGTH = 24 * 7  # default episode horizon in hours (~1 week)

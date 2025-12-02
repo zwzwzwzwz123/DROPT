@@ -97,30 +97,30 @@ def get_args():
                         help='专家控制器类型（用于行为克隆）')
     parser.add_argument('--bc-coef', action='store_true', default=False,
                         help='是否使用行为克隆（BC）损失')
-    parser.add_argument('--bc-weight', type=float, default=1.0,
-                        help='行为克隆损失权重（0=忽略BC，1=纯BC，可介于0-1混合）')
-    parser.add_argument('--bc-weight-final', type=float, default=None,
-                        help='BC权重最终值（默认与bc-weight相同，可用于逐渐减少专家依赖）')
-    parser.add_argument('--bc-weight-decay-steps', type=int, default=0,
-                        help='BC权重线性衰减步数（0表示不衰减）')
+    parser.add_argument('--bc-weight', type=float, default=0.8,
+                        help='行为克隆损失初始权重（默认0.8）')
+    parser.add_argument('--bc-weight-final', type=float, default=0.1,
+                        help='BC权重最终值（默认0.1，逐渐过渡到策略梯度）')
+    parser.add_argument('--bc-weight-decay-steps', type=int, default=50000,
+                        help='BC权重线性衰减步数（默认5万步）')
     
     # ========== 基础训练参数（使用配置常量作为默认值） ==========
-    parser.add_argument('--exploration-noise', type=float, default=DEFAULT_EXPLORATION_NOISE,
-                        help=f'探索噪声标准差 (默认{DEFAULT_EXPLORATION_NOISE})')
+    parser.add_argument('--exploration-noise', type=float, default=0.15,
+                        help='探索噪声标准差 (默认0.15，增强早期探索)')
     parser.add_argument('--algorithm', type=str, default='diffusion_opt',
                         help='算法名称')
     parser.add_argument('--seed', type=int, default=42,
                         help='随机种子')
     parser.add_argument('--buffer-size', type=int, default=DEFAULT_BUFFER_SIZE,
                         help=f'经验回放缓冲区大小 (默认{DEFAULT_BUFFER_SIZE:,})')
-    parser.add_argument('-e', '--epoch', type=int, default=50000,
-                        help='总训练轮次')
-    parser.add_argument('--step-per-epoch', type=int, default=DEFAULT_STEP_PER_EPOCH,
-                        help='Environment steps collected per epoch (match episode length * env count)')
-    parser.add_argument('--step-per-collect', type=int, default=DEFAULT_STEP_PER_COLLECT,
-                        help='Steps per data collection phase before each round of updates')
-    parser.add_argument('-b', '--batch-size', type=int, default=DEFAULT_BATCH_SIZE,
-                        help=f'批次大小 (默认{DEFAULT_BATCH_SIZE})')
+    parser.add_argument('-e', '--epoch', type=int, default=20000,
+                        help='总训练轮次 (默认 20000，便于阶段性评估)')
+    parser.add_argument('--step-per-epoch', type=int, default=16384,
+                        help='每个epoch采集的环境步数 (默认16384)')
+    parser.add_argument('--step-per-collect', type=int, default=4096,
+                        help='每次采集的步数 (默认4096，提升样本质量)')
+    parser.add_argument('-b', '--batch-size', type=int, default=256,
+                        help='批次大小 (默认256)')
     parser.add_argument('--wd', type=float, default=1e-4,
                         help='权重衰减系数')
     parser.add_argument('--gamma', type=float, default=DEFAULT_GAMMA,
@@ -143,8 +143,8 @@ def get_args():
     # ========== 网络架构参数（使用配置常量作为默认值） ==========
     parser.add_argument('--hidden-dim', type=int, default=DEFAULT_HIDDEN_DIM,
                         help=f'MLP隐藏层维度 (默认{DEFAULT_HIDDEN_DIM})')
-    parser.add_argument('--actor-lr', type=float, default=DEFAULT_ACTOR_LR,
-                        help=f'Actor学习率 (默认{DEFAULT_ACTOR_LR})')
+    parser.add_argument('--actor-lr', type=float, default=1e-4,
+                        help='Actor学习率 (默认1e-4，降低梯度震荡)')
     parser.add_argument('--critic-lr', type=float, default=DEFAULT_CRITIC_LR,
                         help=f'Critic学习率 (默认{DEFAULT_CRITIC_LR})')
     parser.add_argument('--reward-scale', type=float, default=DEFAULT_REWARD_SCALE,
@@ -181,9 +181,8 @@ def get_args():
                         help='向量环境实现 (dummy=单进程, subproc=多进程并行)')
     parser.add_argument('--log-update-interval', type=int, default=50,
                         help='记录梯度/优化指标到 TensorBoard 的间隔（梯度步）')
-    parser.add_argument('--update-per-step', type=float, default=1.0,
-                        help='每个环境步执行的参数更新次数 (<=1.0 可减少计算)')
-    
+    parser.add_argument('--update-per-step', type=float, default=0.5,
+                        help='每个环境步执行的参数更新次数 (默认0.5)')
     args = parser.parse_args()
 
     if args.full_episode:

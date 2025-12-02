@@ -430,12 +430,12 @@ class DiffusionOPT(BasePolicy):
         # ========== 梯度裁剪 ==========
         critic_grad_norm = torch.nn.utils.clip_grad_norm_(
             self._critic.parameters(),
-            max_norm=10.0
+            max_norm=20.0
         )
 
         # 检测梯度爆炸
-        if critic_grad_norm > 10.0:
-            print(f"⚠️ Critic梯度过大: {critic_grad_norm:.2f}, 已裁剪到10.0")
+        if critic_grad_norm > 20.0:
+            print(f"⚠️ Critic梯度过大: {critic_grad_norm:.2f}, 已裁剪到20.0")
 
         self._critic_optim.step()
 
@@ -592,12 +592,12 @@ class DiffusionOPT(BasePolicy):
         # ========== Actor梯度裁剪 ==========
         actor_grad_norm = torch.nn.utils.clip_grad_norm_(
             self._actor.parameters(),
-            max_norm=10.0
+            max_norm=20.0
         )
 
         # 检测梯度爆炸
-        if actor_grad_norm > 10.0:
-            print(f"⚠️ Actor梯度过大: {actor_grad_norm:.2f}, 已裁剪到10.0")
+        if actor_grad_norm > 20.0:
+            print(f"⚠️ Actor梯度过大: {actor_grad_norm:.2f}, 已裁剪到20.0")
 
         self._actor_optim.step()
 
