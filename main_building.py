@@ -225,7 +225,8 @@ def main():
         log_interval=1,  # 每个epoch都输出（可改为10表示每10个epoch输出一次）
         verbose=True,  # True=详细格式，False=紧凑格式
         diffusion_steps=args.diffusion_steps,  # 扩散模型步数
-        update_log_interval=args.log_update_interval
+        update_log_interval=args.log_update_interval,
+        step_per_epoch=args.step_per_epoch
     )
     
     # 打印配置

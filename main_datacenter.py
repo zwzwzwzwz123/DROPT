@@ -260,7 +260,8 @@ def main(args=None):
         log_interval=1,  # 每个epoch都输出（可改为10表示每10个epoch输出一次）
         verbose=True,  # True=详细格式，False=紧凑格式
         diffusion_steps=args.n_timesteps,
-        update_log_interval=args.log_update_interval
+        update_log_interval=args.log_update_interval,
+        step_per_epoch=args.step_per_epoch
     )
 
     print(f"  ✓ 日志路径: {log_path}")

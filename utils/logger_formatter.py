@@ -4,6 +4,7 @@
 # 提供美化的终端日志输出，使训练过程更清晰易读
 
 import time
+import math
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 
@@ -296,7 +297,7 @@ class EnhancedTensorboardLogger:
 
     def __init__(self, writer, total_epochs: int, reward_scale: float = 1.0,
                  log_interval: int = 1, verbose: bool = True, diffusion_steps: int = None,
-                 update_log_interval: int = 1):
+                 update_log_interval: int = 1, step_per_epoch: int = 1):
         """
         初始化增强日志记录器
 
@@ -316,6 +317,7 @@ class EnhancedTensorboardLogger:
         self.verbose = verbose  # 是否详细输出
         self.writer = writer  # TensorBoard writer
         self.update_log_interval = max(1, update_log_interval)  # 梯度日志抽样间隔
+        self.step_per_epoch = max(1, step_per_epoch)
 
         # 初始化结果缓存
         self._last_train_result = {}
@@ -364,8 +366,8 @@ class EnhancedTensorboardLogger:
 
         # 保存测试结果
         self._last_test_result = collect_result
-        # 更新当前epoch（除以4修正）
-        self._current_epoch = step // 4
+        # 根据 env_step 推算当前 epoch
+        self._current_epoch = max(1, math.ceil(step / self.step_per_epoch))
 
         # 输出到终端（测试后输出）
         self._output_to_terminal()
@@ -384,8 +386,8 @@ class EnhancedTensorboardLogger:
         # 保存训练结果
         self._last_train_result = collect_result
 
-        # 更新当前epoch（除以4修正）
-        self._current_epoch = step // 4
+        # 根据 env_step 推算当前 epoch
+        self._current_epoch = max(1, math.ceil(step / self.step_per_epoch))
 
     def log_update_data(self, update_result: Dict[str, Any], step: int):
         """
