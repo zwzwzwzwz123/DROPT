@@ -386,10 +386,28 @@ class BearEnvWrapper(gym.Env):
             done = True
         
         # 构造信息字典
+        zone_temps = np.array(
+            bear_info.get('zone_temperature', state[:self.roomnum]),
+            dtype=np.float32
+        )
+        temp_delta = zone_temps - self.target_temp
+        abs_delta = np.abs(temp_delta)
+        comfort_mean = float(abs_delta.mean()) if abs_delta.size else 0.0
+        comfort_max = float(abs_delta.max()) if abs_delta.size else 0.0
+        comfort_violation = int((abs_delta > self.temp_tolerance).sum()) if abs_delta.size else 0
+
+        avg_action_usage = float(np.mean(np.abs(bear_action)))
+        energy_kwh = avg_action_usage * self.max_power * (self.time_resolution / 3600.0) / 1000.0
+
         info = {
             'bear_info': bear_info,
             'current_step': self.current_step,
             'total_reward': self.total_reward,
+            'hvac_power_ratio': avg_action_usage,
+            'hvac_energy_kwh': energy_kwh,
+            'comfort_mean_abs_dev': comfort_mean,
+            'comfort_max_dev': comfort_max,
+            'comfort_violations': comfort_violation,
         }
         
         # 添加专家动作
@@ -428,6 +446,7 @@ def make_building_env(
     location: str = 'Tucson',
     training_num: int = 1,
     test_num: int = 1,
+    vector_env_type: str = 'dummy',
     **kwargs
 ) -> Tuple[BearEnvWrapper, Any, Any]:
     """
@@ -446,7 +465,7 @@ def make_building_env(
     - train_envs: 训练环境向量
     - test_envs: 测试环境向量
     """
-    from tianshou.env import DummyVectorEnv
+    from tianshou.env import DummyVectorEnv, SubprocVectorEnv
 
     # 修复：定义环境工厂函数，避免 lambda 闭包共享可变对象的潜在风险
     def env_factory():
@@ -460,11 +479,13 @@ def make_building_env(
     # 创建单个环境实例
     env = env_factory()
 
+    vector_cls = DummyVectorEnv if vector_env_type != 'subproc' else SubprocVectorEnv
+
     # 创建训练环境向量
-    train_envs = DummyVectorEnv([env_factory for _ in range(training_num)])
+    train_envs = vector_cls([env_factory for _ in range(training_num)])
 
     # 创建测试环境向量
-    test_envs = DummyVectorEnv([env_factory for _ in range(test_num)])
+    test_envs = vector_cls([env_factory for _ in range(test_num)])
 
     return env, train_envs, test_envs
 

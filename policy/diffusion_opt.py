@@ -11,6 +11,7 @@ import numpy as np
 import torch.nn.functional as F
 from copy import deepcopy
 from typing import Any, Dict, List, Type, Optional, Union
+from contextlib import nullcontext
 from tianshou.data import Batch, ReplayBuffer, to_torch
 from tianshou.policy import BasePolicy
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -98,6 +99,9 @@ class DiffusionOPT(BasePolicy):
             lr_decay: bool = False,
             lr_maxt: int = 1000,
             bc_coef: bool = False,
+            bc_weight: float = 1.0,
+            bc_weight_final: Optional[float] = None,
+            bc_weight_decay_steps: int = 0,
             exploration_noise: float = 0.1,
             exploration_decay: bool = True,
             exploration_decay_steps: int = 100000,
@@ -162,8 +166,16 @@ class DiffusionOPT(BasePolicy):
         self._n_step = estimation_step  # N步TD估计
         self._lr_decay = lr_decay  # 是否使用学习率衰减
         self._bc_coef = bc_coef  # 训练模式标志
+        self._bc_weight = float(np.clip(bc_weight, 0.0, 1.0))  # 行为克隆与策略梯度的混合权重
+        final_bc = self._bc_weight if bc_weight_final is None else float(np.clip(bc_weight_final, 0.0, 1.0))
+        if bc_weight_decay_steps > 0 and not np.isclose(self._bc_weight, final_bc):
+            self._bc_weight_scheduler = LinearScheduler(self._bc_weight, final_bc, bc_weight_decay_steps)
+        else:
+            self._bc_weight_scheduler = None
+        self._bc_weight_target = final_bc
         self._device = device  # 计算设备
         self.noise_generator = GaussianNoise(sigma=exploration_noise)  # 噪声生成器
+        self.updating = False  # 标记当前是否处于训练反向阶段
 
         # ========== 探索策略 ==========
         if exploration_decay and not bc_coef:
@@ -176,6 +188,20 @@ class DiffusionOPT(BasePolicy):
             print(f"✓ 启用探索率衰减: {exploration_initial_rate} → {exploration_final_rate} (over {exploration_decay_steps} steps)")
         else:
             self.exploration_scheduler = None
+
+    def _predict_action(self, obs_tensor: torch.Tensor, use_target: bool = False) -> torch.Tensor:
+        """
+        Compute policy action without going through Tianshou's Batch helper.
+
+        直接调用扩散 Actor/Target Actor，避免重复的 numpy->tensor 拷贝与探索噪声逻辑，
+        在训练阶段可显著降低 CPU/GPU 间的数据往返。
+
+        Args:
+            obs_tensor: 已在目标设备上的状态张量
+            use_target: 是否使用目标 Actor
+        """
+        model = self._target_actor if use_target else self._actor
+        return model(obs_tensor)
 
     def _target_q(self, buffer: ReplayBuffer, indices: np.ndarray) -> torch.Tensor:
         """
@@ -192,13 +218,14 @@ class DiffusionOPT(BasePolicy):
         - target_q: 目标Q值（使用双Q网络的最小值）
         """
         batch = buffer[indices]  # 获取batch（s_{t+n}）
-        
-        # 使用目标Actor生成下一状态的动作
-        ttt = self(batch, model='_target_actor', input='obs_next').act
-        
+
+        # 使用目标Actor生成下一状态的动作（禁用梯度和探索噪声）
+        obs_next = to_torch(batch.obs_next, device=self._device, dtype=torch.float32)
+        with torch.no_grad():
+            target_actions = self._predict_action(obs_next, use_target=True)
+
         # 使用目标Critic评估动作价值
-        batch.obs_next = to_torch(batch.obs_next, device=self._device, dtype=torch.float32)
-        target_q = self._target_critic.q_min(batch.obs_next, ttt)
+        target_q = self._target_critic.q_min(obs_next, target_actions)
         
         # 返回双Q网络的最小值（减少过估计）
         return target_q
@@ -264,6 +291,11 @@ class DiffusionOPT(BasePolicy):
         # ========== 更新网络 ==========
         result = self.learn(batch, **kwargs)
 
+        # ========== 更新BC权重调度 ==========
+        if self._bc_weight_scheduler is not None:
+            self._bc_weight = self._bc_weight_scheduler.step()
+        result['bc_weight'] = self._bc_weight
+
         # ========== 学习率衰减 ==========
         if self._lr_decay:
             self._actor_lr_scheduler.step()
@@ -306,9 +338,11 @@ class DiffusionOPT(BasePolicy):
         
         # 选择模型（普通或目标）
         model_ = self._actor if model == "actor" else self._target_actor
-        
+        grad_context = nullcontext() if self.updating else torch.no_grad()
+
         # 通过扩散模型生成动作
-        logits, hidden = model_(obs_), None
+        with grad_context:
+            logits, hidden = model_(obs_), None
 
         # ========== 探索策略 ==========
         if self._bc_coef:
@@ -426,7 +460,7 @@ class DiffusionOPT(BasePolicy):
         return critic_loss, critic_grad_norm, q_stats
 
 
-    def _update_bc(self, batch: Batch, update: bool = False) -> torch.Tensor:
+    def _update_bc(self, batch: Batch, update: bool = False) -> Optional[torch.Tensor]:
         """
         计算行为克隆损失（有专家数据模式）
         
@@ -442,8 +476,18 @@ class DiffusionOPT(BasePolicy):
         """
         obs_ = to_torch(batch.obs, device=self._device, dtype=torch.float32)
         
-        # 提取专家动作（水注入算法的最优解）
-        expert_actions = torch.Tensor([info["expert_action"] for info in batch.info]).to(self._device)
+        expert_actions = []
+        for info in batch.info:
+            action = info.get("expert_action")
+            if action is None:
+                return None
+            expert_actions.append(action)
+
+        expert_actions = torch.as_tensor(
+            np.stack(expert_actions, axis=0),
+            dtype=torch.float32,
+            device=self._device
+        )
 
         # 计算扩散模型的损失
         bc_loss = self._actor.loss(expert_actions, obs_).mean()
@@ -471,9 +515,9 @@ class DiffusionOPT(BasePolicy):
         - pg_loss: 策略梯度损失
         """
         obs_ = to_torch(batch.obs, device=self._device, dtype=torch.float32)
-        
-        # 生成动作
-        acts_ = to_torch(self(batch).act, device=self._device, dtype=torch.float32)
+
+        # 生成动作（直接调用 Actor，避免重复的Batch封装开销）
+        acts_ = self._predict_action(obs_)
         
         # 计算策略梯度损失（负Q值）
         pg_loss = - self._critic.q_min(obs_, acts_).mean()
@@ -523,14 +567,20 @@ class DiffusionOPT(BasePolicy):
         critic_loss, critic_grad_norm, q_stats = self._update_critic(batch)
 
         # ========== 步骤2：更新Actor ==========
+        bc_loss = None
+        pg_loss = None
         if self._bc_coef:
-            # 有专家数据：使用行为克隆
             bc_loss = self._update_bc(batch, update=False)
+
+        if bc_loss is not None and self._bc_weight >= 1.0:
             overall_loss = bc_loss
         else:
-            # 无专家数据：使用策略梯度
             pg_loss = self._update_policy(batch, update=False)
-            overall_loss = pg_loss
+            if bc_loss is not None and self._bc_weight > 0.0:
+                mix = self._bc_weight
+                overall_loss = mix * bc_loss + (1 - mix) * pg_loss
+            else:
+                overall_loss = pg_loss
 
         # ========== 检测Actor损失 ==========
         check_numerical_stability(overall_loss, "Actor损失", raise_error=True)
@@ -571,6 +621,8 @@ class DiffusionOPT(BasePolicy):
             # 损失
             'loss/critic': critic_loss.item(),
             'loss/actor': overall_loss.item(),
+            'loss/bc': bc_loss.item() if bc_loss is not None else 0.0,
+            'loss/pg': pg_loss.item() if pg_loss is not None else 0.0,
 
             # 梯度范数
             'grad_norm/critic': critic_grad_norm.item(),
@@ -650,6 +702,33 @@ class ExplorationScheduler:
     def reset(self):
         """重置"""
         self.current_step = 0
+
+
+class LinearScheduler:
+    """
+    简单的线性调度器，用于逐步调整某个超参数（如 BC 权重）
+    """
+
+    def __init__(self, start: float, end: float, steps: int) -> None:
+        self.start = start
+        self.end = end
+        self.steps = max(1, steps)
+        self.current_step = 0
+        self.current = start
+
+    def step(self) -> float:
+        """执行一步调度并返回当前值"""
+        if self.current_step >= self.steps:
+            self.current = self.end
+            return self.current
+        self.current_step += 1
+        ratio = min(1.0, self.current_step / self.steps)
+        self.current = self.start + (self.end - self.start) * ratio
+        return self.current
+
+    def get(self) -> float:
+        """获取当前调度值"""
+        return self.current
 
 
 class GaussianNoise:

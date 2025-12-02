@@ -98,7 +98,11 @@ def get_args():
     parser.add_argument('--bc-coef', action='store_true', default=False,
                         help='是否使用行为克隆（BC）损失')
     parser.add_argument('--bc-weight', type=float, default=1.0,
-                        help='行为克隆损失权重')
+                        help='行为克隆损失权重（0=忽略BC，1=纯BC，可介于0-1混合）')
+    parser.add_argument('--bc-weight-final', type=float, default=None,
+                        help='BC权重最终值（默认与bc-weight相同，可用于逐渐减少专家依赖）')
+    parser.add_argument('--bc-weight-decay-steps', type=int, default=0,
+                        help='BC权重线性衰减步数（0表示不衰减）')
     
     # ========== 基础训练参数（使用配置常量作为默认值） ==========
     parser.add_argument('--exploration-noise', type=float, default=DEFAULT_EXPLORATION_NOISE,
@@ -129,6 +133,12 @@ def get_args():
                         help=f'并行测试环境数量 (默认{DEFAULT_TEST_NUM})')
     parser.add_argument('--episode-per-test', type=int, default=DEFAULT_EPISODE_PER_TEST,
                         help='每次评估所跑的episode数量（减少可缩短每轮评估时间）')
+    parser.add_argument('--prioritized-replay', action='store_true', default=False,
+                        help='是否启用优先经验回放（PER）')
+    parser.add_argument('--prior-alpha', type=float, default=0.6,
+                        help='PER 采样分布平滑因子 alpha')
+    parser.add_argument('--prior-beta', type=float, default=0.4,
+                        help='PER 重要性采样修正 beta')
 
     # ========== 网络架构参数（使用配置常量作为默认值） ==========
     parser.add_argument('--hidden-dim', type=int, default=DEFAULT_HIDDEN_DIM,
@@ -166,6 +176,13 @@ def get_args():
                         help='是否使用学习率衰减')
     parser.add_argument('--save-interval', type=int, default=DEFAULT_SAVE_INTERVAL,
                         help=f'模型保存间隔（轮次，默认{DEFAULT_SAVE_INTERVAL}）')
+    parser.add_argument('--vector-env-type', type=str, default='dummy',
+                        choices=['dummy', 'subproc'],
+                        help='向量环境实现 (dummy=单进程, subproc=多进程并行)')
+    parser.add_argument('--log-update-interval', type=int, default=50,
+                        help='记录梯度/优化指标到 TensorBoard 的间隔（梯度步）')
+    parser.add_argument('--update-per-step', type=float, default=1.0,
+                        help='每个环境步执行的参数更新次数 (<=1.0 可减少计算)')
     
     args = parser.parse_args()
 
@@ -175,6 +192,9 @@ def get_args():
     if args.reward_normalization and args.n_step > 1:
         print("⚠️  提示: n_step>1 与奖励归一化不兼容，已自动关闭 reward_normalization")
         args.reward_normalization = False
+
+    if args.bc_weight_final is None:
+        args.bc_weight_final = args.bc_weight
 
     return args
 
@@ -205,7 +225,8 @@ def main():
         reward_scale=args.reward_scale,
         log_interval=1,  # 每个epoch都输出（可改为10表示每10个epoch输出一次）
         verbose=True,  # True=详细格式，False=紧凑格式
-        diffusion_steps=args.diffusion_steps  # 扩散模型步数
+        diffusion_steps=args.diffusion_steps,  # 扩散模型步数
+        update_log_interval=args.log_update_interval
     )
     
     # 打印配置
@@ -234,7 +255,8 @@ def main():
         reward_scale=args.reward_scale,  # 奖励缩放，降低Q值和损失的尺度
         expert_type=args.expert_type if args.bc_coef else None,
         training_num=args.training_num,
-        test_num=args.test_num
+        test_num=args.test_num,
+        vector_env_type=args.vector_env_type
     )
     
     print(f"✓ 环境创建成功")
@@ -309,6 +331,9 @@ def main():
         gamma=args.gamma,
         exploration_noise=args.exploration_noise,
         bc_coef=args.bc_coef,
+        bc_weight=args.bc_weight,
+        bc_weight_final=args.bc_weight_final,
+        bc_weight_decay_steps=args.bc_weight_decay_steps,
         action_space=env.action_space,
         estimation_step=args.n_step,
         lr_decay=args.lr_decay,
@@ -324,10 +349,21 @@ def main():
     
     # ========== 创建收集器 ==========
     print("\n正在创建数据收集器...")
+    buffer_num = max(1, args.training_num)
+    if args.prioritized_replay:
+        replay_buffer = PrioritizedVectorReplayBuffer(
+            args.buffer_size,
+            buffer_num=buffer_num,
+            alpha=args.prior_alpha,
+            beta=args.prior_beta,
+        )
+    else:
+        replay_buffer = VectorReplayBuffer(args.buffer_size, buffer_num)
+
     train_collector = Collector(
         policy,
         train_envs,
-        VectorReplayBuffer(args.buffer_size, len(train_envs)),
+        replay_buffer,
         exploration_noise=True
     )
     
@@ -336,7 +372,8 @@ def main():
     print(f"✓ 收集器创建成功")
     print(f"  训练环境数: {args.training_num}")
     print(f"  测试环境数: {args.test_num}")
-    print(f"  缓冲区大小: {args.buffer_size:,}")
+    buffer_type = "Prioritized" if args.prioritized_replay else "Uniform"
+    print(f"  缓冲区大小: {args.buffer_size:,} ({buffer_type})")
     
     # ========== 开始训练 ==========
     print("\n" + "=" * 60)
@@ -357,7 +394,7 @@ def main():
         step_per_collect=args.step_per_collect,
         episode_per_test=args.episode_per_test,
         batch_size=args.batch_size,
-        update_per_step=1.0,
+        update_per_step=args.update_per_step,
         test_in_train=False,
         logger=logger,
         save_best_fn=lambda policy: torch.save(

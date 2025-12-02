@@ -48,6 +48,7 @@ class DataCenterEnv(gym.Env):
         use_real_weather: bool = False,    # 是否使用真实气象数据
         weather_file: str = None,          # 气象数据文件路径
         workload_file: str = None,         # 负载数据文件路径
+        expert_type: str = 'pid',          # 专家控制器类型
     ):
         super(DataCenterEnv, self).__init__()
         
@@ -125,7 +126,7 @@ class DataCenterEnv(gym.Env):
         self.expert_controller = ExpertController(
             num_crac=num_crac_units,
             target_temp=target_temp,
-            controller_type='pid'  # 可选：'pid', 'mpc', 'rule_based'
+            controller_type=expert_type  # 可选：'pid', 'mpc', 'rule_based'
         )
         
         # ========== 加载外部数据 ==========
@@ -464,7 +465,12 @@ class DataCenterEnv(gym.Env):
         pass
 
 
-def make_datacenter_env(training_num: int = 1, test_num: int = 1, **kwargs):
+def make_datacenter_env(
+    training_num: int = 1,
+    test_num: int = 1,
+    vector_env_type: str = 'dummy',
+    **kwargs
+):
     """
     创建数据中心环境（兼容DROPT接口）
     
@@ -478,20 +484,16 @@ def make_datacenter_env(training_num: int = 1, test_num: int = 1, **kwargs):
     - train_envs: 训练环境向量
     - test_envs: 测试环境向量
     """
-    from tianshou.env import DummyVectorEnv
+    from tianshou.env import DummyVectorEnv, SubprocVectorEnv
     
-    # 创建单个环境实例
-    env = DataCenterEnv(**kwargs)
+    def env_factory():
+        return DataCenterEnv(**kwargs)
     
-    # 创建训练环境向量
-    train_envs = DummyVectorEnv([
-        lambda: DataCenterEnv(**kwargs) for _ in range(training_num)
-    ])
+    env = env_factory()
+    vector_cls = DummyVectorEnv if vector_env_type != 'subproc' else SubprocVectorEnv
     
-    # 创建测试环境向量
-    test_envs = DummyVectorEnv([
-        lambda: DataCenterEnv(**kwargs) for _ in range(test_num)
-    ])
+    train_envs = vector_cls([env_factory for _ in range(training_num)])
+    test_envs = vector_cls([env_factory for _ in range(test_num)])
     
     return env, train_envs, test_envs
 
