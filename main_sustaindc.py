@@ -1,7 +1,7 @@
 # ========================================
-# SustainDC integration entry point
+# SustainDC 集成入口
 # ========================================
-# Mirrors the BEAR + data center scripts but uses the SustainDCEnvWrapper.
+# 复用 BEAR + 数据中心脚本，并切换为 SustainDCEnvWrapper。
 
 import argparse
 import os
@@ -56,63 +56,63 @@ from dropt_utils.tianshou_compat import offpolicy_trainer
 def get_args():
     parser = argparse.ArgumentParser(description="Train DiffusionOPT on SustainDC")
 
-    # SustainDC specific knobs
-    parser.add_argument("--location", type=str, default=DEFAULT_LOCATION, help="Weather/CI location key (ny, ca, ...).")
-    parser.add_argument("--month", type=int, default=DEFAULT_MONTH_INDEX, help="0-based month index used for init day sampling.")
-    parser.add_argument("--days-per-episode", type=int, default=DEFAULT_DAYS_PER_EPISODE, help="Length of each SustainDC rollout (in days).")
-    parser.add_argument("--timezone-shift", type=int, default=DEFAULT_TIMEZONE_SHIFT, help="Shift applied to the time-series managers.")
-    parser.add_argument("--datacenter-capacity-mw", type=float, default=DEFAULT_DATACENTER_CAPACITY_MW, help="Scaling factor for the PyE+ data center.")
-    parser.add_argument("--max-bat-cap-mw", type=float, default=DEFAULT_MAX_BAT_CAP_MW, help="Installed battery capacity (MW).")
-    parser.add_argument("--flexible-load", type=float, default=DEFAULT_FLEXIBLE_LOAD_RATIO, help="Proportion of shiftable workload.")
-    parser.add_argument("--individual-reward-weight", type=float, default=DEFAULT_INDIVIDUAL_REWARD_WEIGHT, help="Per-agent reward mixing coefficient.")
-    parser.add_argument("--reward-aggregation", choices=["mean", "sum"], default=DEFAULT_REWARD_AGGREGATION, help="How to aggregate the three agent rewards.")
-    parser.add_argument("--cintensity-file", type=str, default=DEFAULT_WRAPPER_CONFIG["cintensity_file"], help="Carbon intensity CSV located inside dc-rl-main/data/CarbonIntensity.")
-    parser.add_argument("--weather-file", type=str, default=DEFAULT_WRAPPER_CONFIG["weather_file"], help="Weather EPW filename relative to data/Weather.")
-    parser.add_argument("--workload-file", type=str, default=DEFAULT_WRAPPER_CONFIG["workload_file"], help="Workload CSV filename relative to data/Workload.")
-    parser.add_argument("--dc-config-file", type=str, default=DEFAULT_WRAPPER_CONFIG["dc_config_file"], help="Data center json config relative to dc-rl-main/utils.")
-    parser.add_argument("--action-threshold", type=float, default=0.33, help="Threshold used when mapping Diffusion outputs to SustainDC discrete actions.")
+    # SustainDC 特定参数选项
+    parser.add_argument("--location", type=str, default=DEFAULT_LOCATION, help="天气/碳强度区域标识（如 ny、ca 等）。")
+    parser.add_argument("--month", type=int, default=DEFAULT_MONTH_INDEX, help="用于采样初始天数的 0 基月份索引。")
+    parser.add_argument("--days-per-episode", type=int, default=DEFAULT_DAYS_PER_EPISODE, help="单个 SustainDC rollout 的天数。")
+    parser.add_argument("--timezone-shift", type=int, default=DEFAULT_TIMEZONE_SHIFT, help="时间序列管理器使用的时区平移量。")
+    parser.add_argument("--datacenter-capacity-mw", type=float, default=DEFAULT_DATACENTER_CAPACITY_MW, help="PyE+ 数据中心的负载缩放系数。")
+    parser.add_argument("--max-bat-cap-mw", type=float, default=DEFAULT_MAX_BAT_CAP_MW, help="电池装机容量（MW）。")
+    parser.add_argument("--flexible-load", type=float, default=DEFAULT_FLEXIBLE_LOAD_RATIO, help="可移峰（可调度）负载占比。")
+    parser.add_argument("--individual-reward-weight", type=float, default=DEFAULT_INDIVIDUAL_REWARD_WEIGHT, help="单个智能体奖励与全局奖励的混合权重。")
+    parser.add_argument("--reward-aggregation", choices=["mean", "sum"], default=DEFAULT_REWARD_AGGREGATION, help="三个智能体奖励的聚合方式。")
+    parser.add_argument("--cintensity-file", type=str, default=DEFAULT_WRAPPER_CONFIG["cintensity_file"], help="dc-rl-main/data/CarbonIntensity 下的碳强度 CSV 文件名。")
+    parser.add_argument("--weather-file", type=str, default=DEFAULT_WRAPPER_CONFIG["weather_file"], help="data/Weather 目录下天气 EPW 文件名。")
+    parser.add_argument("--workload-file", type=str, default=DEFAULT_WRAPPER_CONFIG["workload_file"], help="data/Workload 目录下的工作负载 CSV 文件名。")
+    parser.add_argument("--dc-config-file", type=str, default=DEFAULT_WRAPPER_CONFIG["dc_config_file"], help="dc-rl-main/utils 下数据中心 JSON 配置文件。")
+    parser.add_argument("--action-threshold", type=float, default=0.33, help="将扩散策略输出映射为 SustainDC 离散动作时使用的阈值。")
 
-    # Training hyper-parameters (align with building defaults for consistency)
-    parser.add_argument("--algorithm", type=str, default="diffusion_opt", help="Algorithm label used for logging.")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed.")
-    parser.add_argument("--training-num", type=int, default=DEFAULT_TRAINING_NUM, help="Number of parallel training envs.")
-    parser.add_argument("--test-num", type=int, default=DEFAULT_TEST_NUM, help="Number of parallel evaluation envs.")
-    parser.add_argument("--vector-env-type", choices=["dummy", "subproc"], default="dummy", help="Tianshou vector env backend.")
-    parser.add_argument("--buffer-size", type=int, default=DEFAULT_BUFFER_SIZE, help="Replay buffer capacity.")
-    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE, help="Mini-batch size.")
-    parser.add_argument("--gamma", type=float, default=DEFAULT_GAMMA, help="Discount factor.")
-    parser.add_argument("--n-step", type=int, default=DEFAULT_N_STEP, help="N-step TD length.")
-    parser.add_argument("--epoch", type=int, default=20000, help="Total training epochs.")
-    parser.add_argument("--step-per-epoch", type=int, default=DEFAULT_STEP_PER_EPOCH, help="Env steps collected per epoch.")
-    parser.add_argument("--step-per-collect", type=int, default=DEFAULT_STEP_PER_COLLECT, help="Env steps per data collection call.")
-    parser.add_argument("--episode-per-test", type=int, default=DEFAULT_EPISODE_PER_TEST, help="Episodes evaluated during testing.")
-    parser.add_argument("--update-per-step", type=float, default=0.5, help="Gradient updates per environment step.")
-    parser.add_argument("--exploration-noise", type=float, default=DEFAULT_EXPLORATION_NOISE, help="Std of Gaussian exploration noise.")
-    parser.add_argument("--hidden-dim", type=int, default=DEFAULT_HIDDEN_DIM, help="Hidden dimension for actor/critic.")
-    parser.add_argument("--diffusion-steps", type=int, default=DEFAULT_DIFFUSION_STEPS, help="Number of diffusion steps.")
-    parser.add_argument("--beta-schedule", type=str, default="vp", choices=["vp", "linear", "cosine"], help="Beta schedule for diffusion.")
-    parser.add_argument("--actor-lr", type=float, default=3e-4, help="Actor learning rate.")
-    parser.add_argument("--critic-lr", type=float, default=1e-4, help="Critic learning rate.")
-    parser.add_argument("--wd", type=float, default=1e-4, help="Weight decay for optimizers.")
-    parser.add_argument("--tau", type=float, default=0.005, help="Soft update coefficient.")
-    parser.add_argument("--logdir", type=str, default="log_sustaindc", help="Root logging directory.")
-    parser.add_argument("--log-prefix", type=str, default="default", help="Extra folder prefix.")
-    parser.add_argument("--log-update-interval", type=int, default=50, help="TensorBoard logging interval (gradient steps).")
-    parser.add_argument("--reward-scale", type=float, default=1.0, help="Purely cosmetic scale used by the logger.")
-    parser.add_argument("--device", type=str, default="cuda:0", help="Torch device.")
-    parser.add_argument("--resume-path", type=str, default=None, help="Optional checkpoint to resume from.")
-    parser.add_argument("--watch", action="store_true", default=False, help="Evaluation-only mode (skip training).")
-    parser.add_argument("--lr-decay", action="store_true", default=False, help="Enable cosine LR decay.")
-    parser.add_argument("--save-interval", type=int, default=1000, help="Dump checkpoint every N epochs.")
+    # 训练超参数（与建筑环境默认值保持一致）
+    parser.add_argument("--algorithm", type=str, default="diffusion_opt", help="用于日志标记的算法名称。")
+    parser.add_argument("--seed", type=int, default=42, help="随机种子。")
+    parser.add_argument("--training-num", type=int, default=DEFAULT_TRAINING_NUM, help="并行训练环境数量。")
+    parser.add_argument("--test-num", type=int, default=DEFAULT_TEST_NUM, help="并行评估环境数量。")
+    parser.add_argument("--vector-env-type", choices=["dummy", "subproc"], default="dummy", help="Tianshou 向量环境后端类型。")
+    parser.add_argument("--buffer-size", type=int, default=DEFAULT_BUFFER_SIZE, help="经验回放缓冲区容量。")
+    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE, help="最小批量大小。")
+    parser.add_argument("--gamma", type=float, default=DEFAULT_GAMMA, help="折扣因子。")
+    parser.add_argument("--n-step", type=int, default=DEFAULT_N_STEP, help="N-step TD 长度。")
+    parser.add_argument("--epoch", type=int, default=20000, help="总训练轮次。")
+    parser.add_argument("--step-per-epoch", type=int, default=DEFAULT_STEP_PER_EPOCH, help="每个 epoch 采集的环境步数。")
+    parser.add_argument("--step-per-collect", type=int, default=DEFAULT_STEP_PER_COLLECT, help="每次 collect 调用采集的步数。")
+    parser.add_argument("--episode-per-test", type=int, default=DEFAULT_EPISODE_PER_TEST, help="测试阶段评估的回合数量。")
+    parser.add_argument("--update-per-step", type=float, default=0.5, help="每个环境步的梯度更新次数。")
+    parser.add_argument("--exploration-noise", type=float, default=DEFAULT_EXPLORATION_NOISE, help="高斯探索噪声标准差。")
+    parser.add_argument("--hidden-dim", type=int, default=DEFAULT_HIDDEN_DIM, help="Actor/Critic 的隐藏层维度。")
+    parser.add_argument("--diffusion-steps", type=int, default=DEFAULT_DIFFUSION_STEPS, help="扩散步骤数量。")
+    parser.add_argument("--beta-schedule", type=str, default="vp", choices=["vp", "linear", "cosine"], help="扩散噪声 beta 调度方式。")
+    parser.add_argument("--actor-lr", type=float, default=3e-4, help="Actor 学习率。")
+    parser.add_argument("--critic-lr", type=float, default=1e-4, help="Critic 学习率。")
+    parser.add_argument("--wd", type=float, default=1e-4, help="优化器权重衰减系数。")
+    parser.add_argument("--tau", type=float, default=0.005, help="Target 网络软更新系数。")
+    parser.add_argument("--logdir", type=str, default="log_sustaindc", help="日志根目录。")
+    parser.add_argument("--log-prefix", type=str, default="default", help="额外的日志目录前缀。")
+    parser.add_argument("--log-update-interval", type=int, default=50, help="TensorBoard 记录间隔（梯度步数）。")
+    parser.add_argument("--reward-scale", type=float, default=1.0, help="仅用于日志展示的奖励缩放系数。")
+    parser.add_argument("--device", type=str, default="cuda:0", help="训练设备（Torch）。")
+    parser.add_argument("--resume-path", type=str, default=None, help="可选的断点恢复模型路径。")
+    parser.add_argument("--watch", action="store_true", default=False, help="仅执行评估，跳过训练。")
+    parser.add_argument("--lr-decay", action="store_true", default=False, help="启用余弦学习率衰减。")
+    parser.add_argument("--save-interval", type=int, default=1000, help="每隔 N 个 epoch 保存一次检查点。")
 
-    # Behaviour cloning and PER toggles
-    parser.add_argument("--bc-coef", action="store_true", default=False, help="Enable behaviour cloning loss.")
-    parser.add_argument("--bc-weight", type=float, default=0.8, help="Initial BC weight when bc-coef is true.")
-    parser.add_argument("--bc-weight-final", type=float, default=None, help="Final BC weight after decay.")
-    parser.add_argument("--bc-weight-decay-steps", type=int, default=50000, help="Linear decay schedule for BC weight.")
-    parser.add_argument("--prioritized-replay", action="store_true", default=False, help="Use prioritized experience replay.")
-    parser.add_argument("--prior-alpha", type=float, default=0.6, help="PER alpha.")
-    parser.add_argument("--prior-beta", type=float, default=0.4, help="PER beta.")
+    # 行为克隆与优先级重放开关
+    parser.add_argument("--bc-coef", action="store_true", default=False, help="启用行为克隆损失。")
+    parser.add_argument("--bc-weight", type=float, default=0.8, help="开启 BC 后的初始权重。")
+    parser.add_argument("--bc-weight-final", type=float, default=None, help="衰减完成后的 BC 最终权重。")
+    parser.add_argument("--bc-weight-decay-steps", type=int, default=50000, help="BC 权重的线性衰减步数。")
+    parser.add_argument("--prioritized-replay", action="store_true", default=False, help="启用优先级经验回放。")
+    parser.add_argument("--prior-alpha", type=float, default=0.6, help="PER 的 alpha 参数。")
+    parser.add_argument("--prior-beta", type=float, default=0.4, help="PER 的 beta 参数。")
 
     parser.add_argument("--reward-normalization", dest="reward_normalization", action="store_true")
     parser.add_argument("--no-reward-normalization", dest="reward_normalization", action="store_false")
@@ -133,6 +133,8 @@ def main(args=None):
     print(" SustainDC 训练启动 ".center(80, "="))
     print("=" * 80)
 
+    # ========== 构建 SustainDC 环境配置 ==========
+    # 该字典会传入 env wrapper，用于统一管理位置、月份等关键配置。
     env_cfg = {
         "location": args.location,
         "month": args.month,
@@ -148,6 +150,7 @@ def main(args=None):
         "dc_config_file": args.dc_config_file,
     }
 
+    # ========== 创建向量化 SustainDC 环境 ==========
     env, train_envs, test_envs = make_sustaindc_env(
         training_num=args.training_num,
         test_num=args.test_num,
@@ -157,6 +160,7 @@ def main(args=None):
         action_threshold=args.action_threshold,
     )
 
+    # ========== 记录环境张量维度信息 ==========
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
     max_action = float(env.action_space.high[0])
@@ -166,13 +170,13 @@ def main(args=None):
     print(f"  Action dim: {action_dim} (aggregated from 3 SustainDC agents)")
     print(f"  Reward aggregation: {args.reward_aggregation}")
 
-    # Seeding
+    # 随机种子设定
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     train_envs.seed(args.seed)
     test_envs.seed(args.seed)
 
-    # Networks
+    # 神经网络结构
     print("\n创建神经网络...")
     actor_backbone = MLP(
         state_dim=state_dim,
@@ -192,6 +196,8 @@ def main(args=None):
     print(f"  Actor params: {sum(p.numel() for p in actor_backbone.parameters()):,}")
     print(f"  Critic params: {sum(p.numel() for p in critic.parameters()):,}")
 
+    # ========== 构建扩散式 Actor ==========
+    # 仍沿用 DROPT 原生组件，通过 n_timesteps/beta_schedule 控制生成质量。
     diffusion = Diffusion(
         state_dim=state_dim,
         action_dim=action_dim,
@@ -202,6 +208,7 @@ def main(args=None):
         bc_coef=args.bc_coef,
     ).to(args.device)
 
+    # ========== 组装 DiffusionOPT 策略 ==========
     policy = DiffusionOPT(
         state_dim=state_dim,
         actor=diffusion,
@@ -224,10 +231,12 @@ def main(args=None):
         reward_normalization=args.reward_normalization,
     )
 
+    # ========== 可选的断点续训 ==========
     if args.resume_path:
         policy.load_state_dict(torch.load(args.resume_path, map_location=args.device))
-        print(f"  ✅ 已加载模型: {args.resume_path}")
+        print(f"  已加载模型: {args.resume_path}")
 
+    # ========== 构建经验回放缓冲区 ==========
     buffer_num = max(1, args.training_num)
     if args.prioritized_replay:
         replay_buffer = PrioritizedVectorReplayBuffer(
@@ -239,9 +248,11 @@ def main(args=None):
     else:
         replay_buffer = VectorReplayBuffer(args.buffer_size, buffer_num=buffer_num)
 
+    # ========== 封装数据收集器 ==========
     train_collector = Collector(policy, train_envs, replay_buffer, exploration_noise=True)
     test_collector = Collector(policy, test_envs)
 
+    # ========== 初始化日志与监控 ==========
     time_now = datetime.now().strftime("%b%d-%H%M%S")
     log_name = f"sustaindc_{args.location}_m{args.month}"
     log_path = os.path.join(args.logdir, args.log_prefix, log_name, time_now)
@@ -259,12 +270,13 @@ def main(args=None):
         step_per_epoch=args.step_per_epoch,
     )
 
+    # ========== 训练辅助回调 ==========
     def save_best_fn(policy_inst):
         torch.save(policy_inst.state_dict(), os.path.join(log_path, "policy_best.pth"))
 
     def save_checkpoint_fn(epoch, *_):
         if epoch % args.save_interval != 0:
-            return None
+            return None  # 非保存间隔直接跳过，避免频繁写盘
         torch.save(
             {
                 "model": policy.state_dict(),
@@ -274,6 +286,7 @@ def main(args=None):
             os.path.join(log_path, f"checkpoint_{epoch}.pth"),
         )
 
+    # ========== 仅评估模式 ==========
     if args.watch:
         policy.eval()
         test_collector.reset()
@@ -283,6 +296,7 @@ def main(args=None):
         print(f"  平均回合长度: {result['lens'].mean():.1f}")
         return
 
+    # ========== 启动训练 ==========
     print("\n" + "=" * 60)
     print("开始训练".center(60, "="))
     print("=" * 60)
@@ -304,6 +318,7 @@ def main(args=None):
         save_checkpoint_fn=save_checkpoint_fn,
     )
 
+    # ========== 汇总并保存模型 ==========
     print("\n" + "=" * 60)
     print("训练完成".center(60, "="))
     print("=" * 60)
