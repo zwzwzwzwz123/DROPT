@@ -12,13 +12,13 @@ from datetime import datetime
 from tianshou.data import Collector, VectorReplayBuffer, PrioritizedVectorReplayBuffer
 from torch.utils.tensorboard import SummaryWriter
 from tianshou.utils import TensorboardLogger
-from tianshou.trainer import offpolicy_trainer
+from dropt_utils.tianshou_compat import offpolicy_trainer
 import warnings
 
 # 导入建筑环境
 from env.building_env_wrapper import make_building_env
 # 导入日志格式化工具
-from utils.logger_formatter import EnhancedTensorboardLogger
+from dropt_utils.logger_formatter import EnhancedTensorboardLogger
 # 导入配置常量（修复：统一管理配置参数，避免硬编码）
 from env.building_config import (
     DEFAULT_REWARD_SCALE,

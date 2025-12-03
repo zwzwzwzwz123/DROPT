@@ -105,6 +105,7 @@ class TrainingLogger:
         # 提取关键指标
         actor_loss = train_result.get('loss/actor', 0.0)
         critic_loss = train_result.get('loss/critic', 0.0)
+        bc_loss = train_result.get('loss/bc', None)
         actor_grad = train_result.get('grad_norm/actor', 0.0)
         critic_grad = train_result.get('grad_norm/critic', 0.0)
 
@@ -138,6 +139,8 @@ class TrainingLogger:
         critic_indicator = self.get_indicator(critic_loss, self.thresholds['critic_loss_high'])
         print(f"  {actor_indicator} Actor损失:     {actor_loss:>10.3f}")
         print(f"  {critic_indicator} Critic损失:    {critic_loss:>10.3f}")
+        if bc_loss is not None:
+            print(f"BC损失:       {bc_loss:>10.3f}")
         
         # 梯度信息
         print("\n📈 梯度范数:")

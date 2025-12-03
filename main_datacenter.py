@@ -12,7 +12,7 @@ from datetime import datetime
 from tianshou.data import Collector, VectorReplayBuffer, PrioritizedVectorReplayBuffer
 from torch.utils.tensorboard import SummaryWriter
 from tianshou.utils import TensorboardLogger
-from tianshou.trainer import offpolicy_trainer
+from dropt_utils.tianshou_compat import offpolicy_trainer
 import warnings
 
 # 导入数据中心环境
@@ -24,7 +24,7 @@ from diffusion import Diffusion
 from diffusion.model import MLP, DoubleCritic
 
 # 导入日志格式化工具
-from utils.logger_formatter import EnhancedTensorboardLogger
+from dropt_utils.logger_formatter import EnhancedTensorboardLogger
 
 warnings.filterwarnings('ignore')
 
