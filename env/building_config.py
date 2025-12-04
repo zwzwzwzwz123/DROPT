@@ -36,7 +36,7 @@ DEFAULT_PID_INTEGRAL_LIMIT = 5.0  # 积分项限制（限制饱和）
 
 # MPC 控制器默认参数
 DEFAULT_MPC_SAFETY_MARGIN = 0.9  # 安全裕度
-DEFAULT_MPC_PLANNING_STEPS = 1  # 规划步数（进一步缩短以提高求解成功率）
+DEFAULT_MPC_PLANNING_STEPS = 3  # 规划步数（默认使用 3 步 MPC 预测）
 
 # 规则控制器默认参数
 DEFAULT_RULE_COOLING_POWER = 0.8  # 制冷功率

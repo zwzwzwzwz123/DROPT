@@ -144,7 +144,13 @@ def evaluate_datacenter(args: argparse.Namespace) -> None:
             f"energy={result['energy']:.2f} kWh, violations={result['violations']:.0f}"
         )
 
-    _print_summary("SustainDC/DataCenter", args.controller, rewards, energies, violations)
+    _print_summary(
+        "SustainDC/DataCenter",
+        args.controller,
+        rewards,
+        energies=energies,
+        violations=violations,
+    )
 
 
 # -----------------------------------------------------------------------------#
@@ -159,21 +165,32 @@ def _run_building_episode(
     obs, _ = env.reset(seed=seed)
     done = False
     ep_reward = 0.0
-    energy_total = 0.0
-    violation_count = 0.0
+    episode_energy = 0.0
+    comfort_sum = 0.0
+    violation_sum = 0.0
+    step_count = 0
 
     while not done:
         action = controller.get_action(obs)
         obs, reward, terminated, truncated, info = env.step(action)
         ep_reward += float(reward)
-        energy_total += float(info.get("hvac_energy_kwh", 0.0))
-        violation_count += float(info.get("comfort_violations", 0))
+        if "episode_hvac_energy_kwh" in info:
+            episode_energy = float(info["episode_hvac_energy_kwh"])
+        else:
+            episode_energy += float(info.get("hvac_energy_kwh", 0.0))
+        comfort_sum += float(info.get("comfort_mean_abs_dev", 0.0))
+        violation_sum += float(info.get("comfort_violations", 0.0))
+        step_count += 1
         done = terminated or truncated
+
+    avg_comfort = comfort_sum / step_count if step_count else 0.0
+    avg_violations = violation_sum / step_count if step_count else 0.0
 
     return {
         "reward": ep_reward,
-        "energy": energy_total,
-        "violations": violation_count,
+        "energy": episode_energy,
+        "avg_comfort": avg_comfort,
+        "avg_violations": avg_violations,
     }
 
 
@@ -215,6 +232,7 @@ def evaluate_building(args: argparse.Namespace) -> None:
 
     rewards: List[float] = []
     energies: List[float] = []
+    comforts: List[float] = []
     violations: List[float] = []
 
     reset_fn = getattr(controller, "reset", None)
@@ -226,13 +244,23 @@ def evaluate_building(args: argparse.Namespace) -> None:
         result = _run_building_episode(env, controller, seed=seed)
         rewards.append(result["reward"])
         energies.append(result["energy"])
-        violations.append(result["violations"])
+        comforts.append(result["avg_comfort"])
+        violations.append(result["avg_violations"])
         print(
-            f"[Episode {idx + 1:02d}] reward={result['reward']:.2f}, "
-            f"HVAC energy={result['energy']:.2f} kWh, comfort violations={result['violations']:.0f}"
+            f"[Episode {idx + 1:02d}] 奖励={result['reward']:.2f}, "
+            f"HVAC能耗={result['energy']:.2f} kWh, "
+            f"平均温差={result['avg_comfort']:.3f} C, "
+            f"平均越界={result['avg_violations']:.3f}"
         )
 
-    _print_summary("BEAR Building", args.controller, rewards, energies, violations)
+    _print_summary(
+        "BEAR Building",
+        args.controller,
+        rewards,
+        energies=energies,
+        comforts=comforts,
+        violations=violations,
+    )
 
 
 # -----------------------------------------------------------------------------#
@@ -436,7 +464,7 @@ def evaluate_sustaindc(args: argparse.Namespace) -> None:
         extras["碳强度"] = ci_means
     if workload_means:
         extras["工作负载"] = workload_means
-    _print_summary("SustainDC", args.controller, rewards, energies=None, violations=None, extras=extras)
+    _print_summary("SustainDC", args.controller, rewards, extras=extras)
 
 
 # -----------------------------------------------------------------------------#
@@ -447,6 +475,7 @@ def _print_summary(
     controller_name: str,
     rewards: List[float],
     energies: Optional[List[float]] = None,
+    comforts: Optional[List[float]] = None,
     violations: Optional[List[float]] = None,
     extras: Optional[Dict[str, List[float]]] = None,
 ) -> None:
@@ -466,6 +495,8 @@ def _print_summary(
 
     if energies:
         print(f"平均能耗: {_format_stats(energies, 'kWh')}")
+    if comforts:
+        print(f"平均温度偏差: {_format_stats(comforts, 'C')}")
     if violations:
         print(f"平均越界次数: {_format_stats(violations)}")
     if extras:

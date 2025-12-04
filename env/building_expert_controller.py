@@ -74,7 +74,7 @@ class BearMPCWrapper(BaseBearController):
         env,
         gamma: Optional[Tuple[float, float]] = None,
         safety_margin: float = 0.9,
-        planning_steps: int = 1
+        planning_steps: int = 3
     ):
         """
         初始化 MPC 控制器
