@@ -5,14 +5,20 @@
 
 import time
 import math
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Callable
 from datetime import datetime, timedelta
 
 
 class TrainingLogger:
     """训练日志格式化器"""
 
-    def __init__(self, total_epochs: int, reward_scale: float = 1.0, diffusion_steps: int = None):
+    def __init__(
+        self,
+        total_epochs: int,
+        reward_scale: float = 1.0,
+        diffusion_steps: int = None,
+        metrics_getter: Optional[Callable[[str], Optional[Dict[str, float]]]] = None,
+    ):
         """
         初始化日志格式化器
 
@@ -24,6 +30,7 @@ class TrainingLogger:
         self.total_epochs = total_epochs  # 总轮次
         self.reward_scale = reward_scale  # 奖励缩放系数
         self.diffusion_steps = diffusion_steps  # 扩散步数
+        self.metrics_getter = metrics_getter
         self.start_time = time.time()  # 训练开始时间
         self.last_epoch_time = time.time()  # 上一轮次时间
         self.epoch_times = []  # 每轮耗时记录
@@ -157,6 +164,16 @@ class TrainingLogger:
         print(f"  真实训练奖励:   {train_reward/self.reward_scale:>10.2f}")
         if test_result:
             print(f"  真实测试奖励:   {test_reward/self.reward_scale:>10.2f}")
+
+        if self.metrics_getter:
+            train_metrics = self.metrics_getter('train')
+            test_metrics = self.metrics_getter('test')
+            if train_metrics or test_metrics:
+                print("\n🌡️ 环境指标:")
+                if train_metrics:
+                    self._print_env_metrics("训练", train_metrics)
+                if test_metrics:
+                    self._print_env_metrics("测试", test_metrics)
         
         # Q值统计
         print("\n💎 Q值统计:")
@@ -190,6 +207,20 @@ class TrainingLogger:
                 print(f"  - {warning}")
         
         print("\n" + "=" * 80)
+
+    def _print_env_metrics(self, label: str, metrics: Dict[str, Optional[float]]) -> None:
+        energy = metrics.get('avg_energy')
+        comfort = metrics.get('avg_comfort_mean')
+        violations = metrics.get('avg_violations')
+        parts = []
+        if energy is not None:
+            parts.append(f"平均能耗: {energy:.2f} kWh")
+        if comfort is not None:
+            parts.append(f"平均温差: {comfort:.2f} °C")
+        if violations is not None:
+            parts.append(f"平均越界: {violations:.2f}")
+        if parts:
+            print(f"  {label}: " + "，".join(parts))
     
     def log_compact(
         self,
@@ -300,7 +331,8 @@ class EnhancedTensorboardLogger:
 
     def __init__(self, writer, total_epochs: int, reward_scale: float = 1.0,
                  log_interval: int = 1, verbose: bool = True, diffusion_steps: int = None,
-                 update_log_interval: int = 1, step_per_epoch: int = 1):
+                 update_log_interval: int = 1, step_per_epoch: int = 1,
+                 metrics_getter: Optional[Callable[[str], Optional[Dict[str, float]]]] = None):
         """
         初始化增强日志记录器
 
@@ -315,7 +347,12 @@ class EnhancedTensorboardLogger:
         from tianshou.utils import TensorboardLogger
 
         self.tb_logger = TensorboardLogger(writer)  # 原始TensorBoard logger
-        self.training_logger = TrainingLogger(total_epochs, reward_scale, diffusion_steps)  # 终端日志格式化器
+        self.training_logger = TrainingLogger(
+            total_epochs,
+            reward_scale,
+            diffusion_steps,
+            metrics_getter=metrics_getter,
+        )  # 终端日志格式化器
         self.log_interval = log_interval  # epoch日志输出间隔
         self.verbose = verbose  # 是否详细输出
         self.writer = writer  # TensorBoard writer

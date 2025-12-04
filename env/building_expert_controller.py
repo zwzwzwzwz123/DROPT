@@ -168,7 +168,8 @@ class BearPIDController(BaseBearController):
         kp: float = 0.5,
         ki: float = 0.01,
         kd: float = 0.1,
-        integral_limit: float = 10.0
+        integral_limit: float = 10.0,
+        deadband: Optional[float] = None
     ):
         """
         初始化 PID 控制器
@@ -191,6 +192,7 @@ class BearPIDController(BaseBearController):
         self.integral = np.zeros(self.roomnum)  # 积分项
         self.last_error = np.zeros(self.roomnum)  # 上一次误差
         self.first_step = True  # 是否是第一步
+        self.deadband = deadband if deadband is not None else env.temp_tolerance
     
     def get_action(self, state: np.ndarray) -> np.ndarray:
         """
@@ -207,6 +209,11 @@ class BearPIDController(BaseBearController):
         
         # 计算温度误差（当前温度 - 目标温度）
         error = zone_temps - self.target_temp
+        if self.deadband is not None and self.deadband > 0:
+            mask = np.abs(error) <= self.deadband
+            if np.any(mask):
+                error = error.copy()
+                error[mask] = 0.0
         
         # 比例项
         p_term = self.kp * error

@@ -12,10 +12,10 @@ BEAR 建筑环境配置常量
 # - 0.01: 推荐配置,奖励适中 (约-640) ⭐
 # - 0.001: 激进配置,奖励较小 (约-64)
 # 根据当前训练,Q值约-7,但原始奖励-64000,建议增加缩放到0.01
-DEFAULT_REWARD_SCALE = 0.001  # 奖励缩放因子（将奖励缩小100倍，稳定训练）
-DEFAULT_ENERGY_WEIGHT = 0.6  # 能耗权重 α（优先节能）
-DEFAULT_TEMP_WEIGHT = 0.4  # 温度偏差权重 β（只需满足温度上限）
-DEFAULT_VIOLATION_PENALTY = 100.0  # 温度越界惩罚系数 γ
+DEFAULT_REWARD_SCALE = 0.00035  # 奖励缩放因子（缩小约2857倍）
+DEFAULT_ENERGY_WEIGHT = 0.4  # 能耗权重 α（更偏向节能）
+DEFAULT_TEMP_WEIGHT = 0.6  # 温度偏差权重 β（允许更宽松温差）
+DEFAULT_VIOLATION_PENALTY = 10.0  # 温度越界惩罚系数 γ（显著降低越界惩罚）
 
 # ========== 环境配置 ==========
 DEFAULT_BUILDING_TYPE = 'OfficeSmall'  # 默认建筑类型
@@ -29,14 +29,14 @@ DEFAULT_EPISODE_LENGTH = 24 * 7  # default episode horizon in hours (~1 week)
 
 # ========== 专家控制器配置 ==========
 # PID 控制器默认参数
-DEFAULT_PID_KP = 0.5  # 比例系数
-DEFAULT_PID_KI = 0.01  # 积分系数
-DEFAULT_PID_KD = 0.1  # 微分系数
-DEFAULT_PID_INTEGRAL_LIMIT = 10.0  # 积分项限制
+DEFAULT_PID_KP = 0.2  # 比例系数（降低防止饱和）
+DEFAULT_PID_KI = 0.005  # 积分系数（减慢积分累积）
+DEFAULT_PID_KD = 0.0  # 微分系数（长时间步长下关闭微分）
+DEFAULT_PID_INTEGRAL_LIMIT = 5.0  # 积分项限制（限制饱和）
 
 # MPC 控制器默认参数
 DEFAULT_MPC_SAFETY_MARGIN = 0.9  # 安全裕度
-DEFAULT_MPC_PLANNING_STEPS = 1  # 规划步数
+DEFAULT_MPC_PLANNING_STEPS = 1  # 规划步数（进一步缩短以提高求解成功率）
 
 # 规则控制器默认参数
 DEFAULT_RULE_COOLING_POWER = 0.8  # 制冷功率
@@ -68,7 +68,7 @@ DEFAULT_ACTOR_LR = 3e-4  # 默认 Actor 学习率
 # - 3e-4: 原始配置,梯度较大时可能不稳定
 # - 1e-4: 推荐配置,更稳定 ⭐
 # - 3e-5: 保守配置,收敛较慢
-DEFAULT_CRITIC_LR = 1e-4  # 默认 Critic 学习率 (从3e-4降低以稳定训练)
+DEFAULT_CRITIC_LR = 2e-5  # 默认 Critic 学习率 (再次降低以平滑更新)
 DEFAULT_EXPLORATION_NOISE = 0.1  # 默认探索噪声标准差
 
 # ========== 日志配置 ==========

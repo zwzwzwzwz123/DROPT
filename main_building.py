@@ -47,6 +47,7 @@ from env.building_config import (
     DEFAULT_EXPLORATION_NOISE,
     DEFAULT_LOG_DIR,
     DEFAULT_SAVE_INTERVAL,
+    DEFAULT_MPC_PLANNING_STEPS,
 )
 
 # 导入 DROPT 核心组件
@@ -86,8 +87,12 @@ def get_args():
                         help=f'能耗权重 α (默认{DEFAULT_ENERGY_WEIGHT})')
     parser.add_argument('--temp-weight', type=float, default=DEFAULT_TEMP_WEIGHT,
                         help=f'温度偏差权重 β (默认{DEFAULT_TEMP_WEIGHT})')
-    parser.add_argument('--add-violation-penalty', action='store_true', default=False,
-                        help='是否添加温度越界惩罚')
+    parser.add_argument('--add-violation-penalty', dest='add_violation_penalty',
+                        action='store_true', default=True,
+                        help='启用温度越界惩罚（默认开启）')
+    parser.add_argument('--no-add-violation-penalty', dest='add_violation_penalty',
+                        action='store_false',
+                        help='关闭温度越界惩罚')
     parser.add_argument('--violation-penalty', type=float, default=DEFAULT_VIOLATION_PENALTY,
                         help=f'温度越界惩罚系数 γ (默认{DEFAULT_VIOLATION_PENALTY})')
 
@@ -95,6 +100,8 @@ def get_args():
     parser.add_argument('--expert-type', type=str, default=None,
                         choices=['mpc', 'pid', 'rule', 'bangbang', None],
                         help='专家控制器类型（用于行为克隆）')
+    parser.add_argument('--mpc-planning-steps', type=int, default=DEFAULT_MPC_PLANNING_STEPS,
+                        help=f'MPC 专家规划步数 (默认{DEFAULT_MPC_PLANNING_STEPS})')
     parser.add_argument('--bc-coef', action='store_true', default=False,
                         help='是否使用行为克隆（BC）损失')
     parser.add_argument('--bc-weight', type=float, default=0.8,
@@ -218,6 +225,8 @@ def main():
     
     # 创建 TensorBoard writer 和增强的日志记录器
     writer = SummaryWriter(log_path)
+    # logger will be created after envs to inject metrics_getter
+    metrics_getter = None
     logger = EnhancedTensorboardLogger(
         writer=writer,
         total_epochs=args.epoch,
@@ -226,7 +235,8 @@ def main():
         verbose=True,  # True=详细格式，False=紧凑格式
         diffusion_steps=args.diffusion_steps,  # 扩散模型步数
         update_log_interval=args.log_update_interval,
-        step_per_epoch=args.step_per_epoch
+        step_per_epoch=args.step_per_epoch,
+        metrics_getter=None  # placeholder, will be replaced later
     )
     
     # 打印配置
@@ -239,6 +249,12 @@ def main():
     
     # ========== 创建环境 ==========
     print("正在创建环境...")
+    expert_kwargs = None
+    if args.expert_type:
+        expert_kwargs = {}
+        if args.expert_type == 'mpc':
+            expert_kwargs['planning_steps'] = args.mpc_planning_steps
+
     env, train_envs, test_envs = make_building_env(
         building_type=args.building_type,
         weather_type=args.weather_type,
@@ -254,6 +270,7 @@ def main():
         violation_penalty=args.violation_penalty,
         reward_scale=args.reward_scale,  # 奖励缩放，降低Q值和损失的尺度
         expert_type=args.expert_type if args.bc_coef else None,
+        expert_kwargs=expert_kwargs,
         training_num=args.training_num,
         test_num=args.test_num,
         vector_env_type=args.vector_env_type
@@ -269,7 +286,32 @@ def main():
     print(f"  奖励缩放系数: {env.reward_scale}")
     if args.expert_type:
         print(f"  专家控制器: {args.expert_type}")
-    
+        if args.expert_type == 'mpc':
+            print(f"    - MPC 规划步数: {args.mpc_planning_steps}")
+
+    def _aggregate_metrics(vector_env):
+        if vector_env is None:
+            return None
+        env_list = getattr(vector_env, "_env_list", None)
+        if not env_list:
+            return None
+        values = [env_inst.consume_metrics() for env_inst in env_list]
+        values = [m for m in values if m]
+        if not values:
+            return None
+        result = {}
+        for key in ('avg_energy', 'avg_comfort_mean', 'avg_violations'):
+            nums = [m[key] for m in values if m.get(key) is not None]
+            if nums:
+                result[key] = float(np.mean(nums))
+        return result if result else None
+
+    def metrics_getter(mode: str):
+        target_env = train_envs if mode == 'train' else test_envs
+        return _aggregate_metrics(target_env)
+
+    logger.training_logger.metrics_getter = metrics_getter
+
     # ========== 创建网络 ==========
     print("\n正在创建神经网络...")
     state_dim = env.state_dim
@@ -366,7 +408,7 @@ def main():
         replay_buffer,
         exploration_noise=True
     )
-    
+
     test_collector = Collector(policy, test_envs)
     
     print(f"✓ 收集器创建成功")

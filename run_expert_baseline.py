@@ -24,6 +24,11 @@ from env.building_config import (
     DEFAULT_TIME_RESOLUTION as DEFAULT_BUILDING_TIME_RESOLUTION,
     DEFAULT_REWARD_SCALE as DEFAULT_BUILDING_REWARD_SCALE,
     DEFAULT_VIOLATION_PENALTY as DEFAULT_BUILDING_VIOLATION_PENALTY,
+    DEFAULT_MPC_PLANNING_STEPS as DEFAULT_BUILDING_MPC_STEPS,
+    DEFAULT_PID_KP,
+    DEFAULT_PID_KI,
+    DEFAULT_PID_KD,
+    DEFAULT_PID_INTEGRAL_LIMIT,
 )
 
 # SustainDC 默认配置
@@ -192,7 +197,21 @@ def evaluate_building(args: argparse.Namespace) -> None:
         add_violation_penalty=args.building_add_violation_penalty,
         violation_penalty=args.building_violation_penalty,
     )
-    controller = create_expert_controller(args.controller, env)
+    controller_kwargs = {}
+    controller_name = args.controller.lower()
+    if controller_name == "mpc":
+        controller_kwargs["planning_steps"] = args.building_mpc_planning_steps
+    elif controller_name == "pid":
+        controller_kwargs.update(
+            {
+                "kp": args.pid_kp,
+                "ki": args.pid_ki,
+                "kd": args.pid_kd,
+                "integral_limit": args.pid_integral_limit,
+                "deadband": args.pid_deadband,
+            }
+        )
+    controller = create_expert_controller(args.controller, env, **controller_kwargs)
 
     rewards: List[float] = []
     energies: List[float] = []
@@ -569,14 +588,58 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--building-add-violation-penalty",
+        dest="building_add_violation_penalty",
         action="store_true",
-        help="是否额外施加越界惩罚",
+        default=True,
+        help="启用温度越界惩罚（默认开启）",
+    )
+    parser.add_argument(
+        "--building-no-violation-penalty",
+        dest="building_add_violation_penalty",
+        action="store_false",
+        help="关闭温度越界惩罚",
     )
     parser.add_argument(
         "--building-violation-penalty",
         type=float,
         default=DEFAULT_BUILDING_VIOLATION_PENALTY,
         help="越界惩罚系数",
+    )
+    parser.add_argument(
+        "--building-mpc-planning-steps",
+        type=int,
+        default=DEFAULT_BUILDING_MPC_STEPS,
+        help=f"MPC 控制器规划步数 (默认 {DEFAULT_BUILDING_MPC_STEPS})",
+    )
+    parser.add_argument(
+        "--pid-kp",
+        type=float,
+        default=DEFAULT_PID_KP,
+        help=f"PID 比例系数 (默认 {DEFAULT_PID_KP})",
+    )
+    parser.add_argument(
+        "--pid-ki",
+        type=float,
+        default=DEFAULT_PID_KI,
+        help=f"PID 积分系数 (默认 {DEFAULT_PID_KI})",
+    )
+    parser.add_argument(
+        "--pid-kd",
+        type=float,
+        default=DEFAULT_PID_KD,
+        help=f"PID 微分系数 (默认 {DEFAULT_PID_KD})",
+    )
+    parser.add_argument(
+        "--pid-integral-limit",
+        type=float,
+        default=DEFAULT_PID_INTEGRAL_LIMIT,
+        help=f"PID 积分项限制 (默认 {DEFAULT_PID_INTEGRAL_LIMIT})",
+    )
+    parser.add_argument(
+        "--pid-deadband",
+        type=float,
+        default=None,
+        help="PID 死区范围 (默认等于温度容差)",
     )
 
     return parser

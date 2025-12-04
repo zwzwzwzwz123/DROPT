@@ -9,7 +9,7 @@ import os
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
-from typing import Dict, Any, Tuple, Optional, Union
+from typing import Dict, Any, Tuple, Optional, Union, List
 
 # 添加 BEAR 到 Python 路径
 bear_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'bear')
@@ -70,10 +70,11 @@ class BearEnvWrapper(gym.Env):
         energy_weight: float = DEFAULT_ENERGY_WEIGHT,            # 能耗权重
         temp_weight: float = DEFAULT_TEMP_WEIGHT,              # 温度偏差权重
         episode_length: Optional[int] = None,    # 回合长度（None表示使用完整年度数据）
-        add_violation_penalty: bool = False,     # 是否添加温度越界惩罚
+        add_violation_penalty: bool = True,      # 是否添加温度越界惩罚
         violation_penalty: float = DEFAULT_VIOLATION_PENALTY,        # 越界惩罚系数
         reward_scale: float = DEFAULT_REWARD_SCALE,               # 奖励缩放系数（降低奖励尺度）
         expert_type: Optional[str] = None,       # 专家控制器类型（第二阶段实现）
+        expert_kwargs: Optional[Dict[str, Any]] = None,  # 专家控制器参数
         **kwargs                                 # 其他传递给 ParameterGenerator 的参数
     ):
         """
@@ -112,6 +113,7 @@ class BearEnvWrapper(gym.Env):
         self.violation_penalty = violation_penalty
         self.reward_scale = reward_scale  # 奖励缩放系数
         self.expert_type = expert_type
+        self.expert_kwargs = expert_kwargs or {}
         
         # ========== 生成 BEAR 环境参数 ==========
         try:
@@ -147,6 +149,7 @@ class BearEnvWrapper(gym.Env):
         # 总维度 = (roomnum+1) + roomnum + 1 + roomnum = 3*roomnum + 2
         self.state_dim = 3 * self.roomnum + 2
         self.action_dim = self.roomnum
+        self.ac_map = self.bear_env.acmap.astype(np.float32)
 
         # ========== 适配状态空间 ==========
         self.observation_space = self._adapt_observation_space()
@@ -172,13 +175,16 @@ class BearEnvWrapper(gym.Env):
         # ========== 初始化计数器 ==========
         self.current_step = 0
         self.total_reward = 0.0
+        self.total_energy_kwh = 0.0
+        self._episode_records: List[Dict[str, float]] = []
+        self._reset_metrics()
         
         # ========== 专家控制器 ==========
         self.expert_controller = None
         if expert_type is not None:
-            self._init_expert_controller(expert_type)
+            self._init_expert_controller(expert_type, self.expert_kwargs)
     
-    def _init_expert_controller(self, expert_type: str):
+    def _init_expert_controller(self, expert_type: str, expert_kwargs: Optional[Dict[str, Any]] = None):
         """
         初始化专家控制器
 
@@ -187,7 +193,8 @@ class BearEnvWrapper(gym.Env):
         """
         try:
             from env.building_expert_controller import create_expert_controller
-            self.expert_controller = create_expert_controller(expert_type, self)
+            kwargs = expert_kwargs or {}
+            self.expert_controller = create_expert_controller(expert_type, self, **kwargs)
             print(f"✓ 专家控制器 '{expert_type}' 初始化成功")
         except Exception as e:
             print(f"警告：专家控制器 '{expert_type}' 初始化失败: {e}")
@@ -335,6 +342,8 @@ class BearEnvWrapper(gym.Env):
         # 重置计数器
         self.current_step = 0
         self.total_reward = 0.0
+        self.total_energy_kwh = 0.0
+        self._reset_metrics()
 
         # 修复：重置专家控制器状态（避免上一个episode的状态影响下一个episode）
         if self.expert_controller is not None:
@@ -396,19 +405,33 @@ class BearEnvWrapper(gym.Env):
         comfort_max = float(abs_delta.max()) if abs_delta.size else 0.0
         comfort_violation = int((abs_delta > self.temp_tolerance).sum()) if abs_delta.size else 0
 
+        # 真实 HVAC 能耗：逐房间动作(绝对值)×单机最大功率×时间分辨率
+        hvac_power_kw = float(
+            np.sum(np.abs(bear_action) * self.ac_map) * (self.max_power / 1000.0)
+        )
+        energy_kwh = hvac_power_kw * (self.time_resolution / 3600.0)
+        self.total_energy_kwh += energy_kwh
         avg_action_usage = float(np.mean(np.abs(bear_action)))
-        energy_kwh = avg_action_usage * self.max_power * (self.time_resolution / 3600.0) / 1000.0
 
         info = {
             'bear_info': bear_info,
             'current_step': self.current_step,
             'total_reward': self.total_reward,
             'hvac_power_ratio': avg_action_usage,
+            'hvac_power_kw': hvac_power_kw,
             'hvac_energy_kwh': energy_kwh,
+            'episode_hvac_energy_kwh': self.total_energy_kwh,
             'comfort_mean_abs_dev': comfort_mean,
             'comfort_max_dev': comfort_max,
             'comfort_violations': comfort_violation,
         }
+
+        self._metric_energy_sum += energy_kwh
+        self._metric_comfort_sum += comfort_mean
+        self._metric_violation_sum += comfort_violation
+        self._metric_steps += 1
+        if done or truncated:
+            self._finalize_episode()
         
         # 添加专家动作
         if self.expert_controller is not None:
@@ -439,6 +462,44 @@ class BearEnvWrapper(gym.Env):
         """关闭环境"""
         pass
 
+    def _reset_metrics(self):
+        self._metric_energy_sum = 0.0
+        self._metric_comfort_sum = 0.0
+        self._metric_violation_sum = 0.0
+        self._metric_steps = 0
+
+    def _finalize_episode(self):
+        if self._metric_steps == 0:
+            return
+        record = {
+            'avg_energy': self.total_energy_kwh,
+            'avg_comfort_mean': self._metric_comfort_sum / self._metric_steps,
+            'avg_violations': self._metric_violation_sum / self._metric_steps,
+        }
+        self._episode_records.append(record)
+        self._reset_metrics()
+        self.total_energy_kwh = 0.0
+
+    def consume_metrics(self):
+        """返回并清空最近完成的episode指标."""
+        if not self._episode_records:
+            return None
+
+        records = self._episode_records
+        self._episode_records = []
+
+        def _avg(key: str) -> Optional[float]:
+            values = [rec[key] for rec in records if rec.get(key) is not None]
+            if not values:
+                return None
+            return float(np.mean(values))
+
+        return {
+            'avg_energy': _avg('avg_energy'),
+            'avg_comfort_mean': _avg('avg_comfort_mean'),
+            'avg_violations': _avg('avg_violations'),
+        }
+
 
 def make_building_env(
     building_type: str = 'OfficeSmall',
@@ -447,6 +508,7 @@ def make_building_env(
     training_num: int = 1,
     test_num: int = 1,
     vector_env_type: str = 'dummy',
+    expert_kwargs: Optional[Dict[str, Any]] = None,
     **kwargs
 ) -> Tuple[BearEnvWrapper, Any, Any]:
     """
@@ -467,25 +529,33 @@ def make_building_env(
     """
     from tianshou.env import DummyVectorEnv, SubprocVectorEnv
 
-    # 修复：定义环境工厂函数，避免 lambda 闭包共享可变对象的潜在风险
-    def env_factory():
+    def _create_env():
         return BearEnvWrapper(
             building_type=building_type,
             weather_type=weather_type,
             location=location,
+            expert_kwargs=(expert_kwargs.copy() if expert_kwargs else None),
             **kwargs
         )
 
-    # 创建单个环境实例
-    env = env_factory()
+    env = _create_env()
 
     vector_cls = DummyVectorEnv if vector_env_type != 'subproc' else SubprocVectorEnv
 
-    # 创建训练环境向量
-    train_envs = vector_cls([env_factory for _ in range(training_num)])
+    def _build_vector_env(num: int):
+        instances = []
 
-    # 创建测试环境向量
-    test_envs = vector_cls([env_factory for _ in range(test_num)])
+        def factory():
+            inst = _create_env()
+            instances.append(inst)
+            return inst
+
+        vec = vector_cls([factory for _ in range(num)])
+        setattr(vec, "_env_list", instances)
+        return vec
+
+    train_envs = _build_vector_env(training_num)
+    test_envs = _build_vector_env(test_num)
 
     return env, train_envs, test_envs
 
