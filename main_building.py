@@ -112,8 +112,8 @@ def get_args():
                         help='BC权重线性衰减步数（默认5万步）')
     
     # ========== 基础训练参数（使用配置常量作为默认值） ==========
-    parser.add_argument('--exploration-noise', type=float, default=0.15,
-                        help='探索噪声标准差 (默认0.15，增强早期探索)')
+    parser.add_argument('--exploration-noise', type=float, default=DEFAULT_EXPLORATION_NOISE,
+                        help=f'探索噪声标准差 (默认{DEFAULT_EXPLORATION_NOISE}，降低随机扰动)')
     parser.add_argument('--algorithm', type=str, default='diffusion_opt',
                         help='算法名称')
     parser.add_argument('--seed', type=int, default=42,

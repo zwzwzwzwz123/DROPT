@@ -69,7 +69,7 @@ DEFAULT_ACTOR_LR = 3e-4  # 默认 Actor 学习率
 # - 1e-4: 推荐配置,更稳定 ⭐
 # - 3e-5: 保守配置,收敛较慢
 DEFAULT_CRITIC_LR = 2e-5  # 默认 Critic 学习率 (再次降低以平滑更新)
-DEFAULT_EXPLORATION_NOISE = 0.1  # 默认探索噪声标准差
+DEFAULT_EXPLORATION_NOISE = 0.05  # 默认探索噪声标准差（降低随机扰动）
 
 # ========== 日志配置 ==========
 DEFAULT_LOG_DIR = 'log_building'  # 默认日志目录
