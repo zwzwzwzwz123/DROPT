@@ -18,6 +18,7 @@ class TrainingLogger:
         reward_scale: float = 1.0,
         diffusion_steps: int = None,
         metrics_getter: Optional[Callable[[str], Optional[Dict[str, float]]]] = None,
+        context_info: Optional[Dict[str, Any]] = None,
     ):
         """
         初始化日志格式化器
@@ -31,6 +32,7 @@ class TrainingLogger:
         self.reward_scale = reward_scale  # 奖励缩放系数
         self.diffusion_steps = diffusion_steps  # 扩散步数
         self.metrics_getter = metrics_getter
+        self.context_info = context_info or {}
         self.start_time = time.time()  # 训练开始时间
         self.last_epoch_time = time.time()  # 上一轮次时间
         self.epoch_times = []  # 每轮耗时记录
@@ -131,7 +133,7 @@ class TrainingLogger:
 
         # 探索率
         exploration_noise = train_result.get('exploration/noise', 0.0)
-        
+
         # 打印格式化的日志
         print("\n" + "=" * 80)
         epoch_info = f"  Epoch {epoch}/{self.total_epochs}  [{epoch/self.total_epochs*100:.1f}%]"
@@ -139,6 +141,19 @@ class TrainingLogger:
             epoch_info += f"  | 扩散步数: {self.diffusion_steps}"
         print(epoch_info)
         print("=" * 80)
+
+        # 上下文提示信息（静态）
+        if self.context_info:
+            sup_steps = self.context_info.get('support_steps')
+            state_dim = self.context_info.get('state_dim')
+            action_dim = self.context_info.get('action_dim')
+            context_dim = self.context_info.get('context_dim')
+            token_dim = self.context_info.get('token_dim')
+            summary_dim = self.context_info.get('summary_dim')
+            print("\n上下文配置:")
+            print(f"  支持步数: {sup_steps}")
+            print(f"  状态维度: {state_dim} | 动作维度: {action_dim}")
+            print(f"  token维度: {token_dim} | 摘要维度: {summary_dim} | 上下文维度: {context_dim}")
         
         # 损失指标
         print("\n📊 损失指标:")
@@ -168,13 +183,15 @@ class TrainingLogger:
         if self.metrics_getter:
             train_metrics = self.metrics_getter('train')
             test_metrics = self.metrics_getter('test')
-            if train_metrics or test_metrics:
-                print("\n🌡️ 环境指标:")
-                if train_metrics:
-                    self._print_env_metrics("训练", train_metrics)
-                if test_metrics:
-                    self._print_env_metrics("测试", test_metrics)
-        
+            print("\n\U0001f321\ufe0f \u73af\u5883\u6307\u6807:")
+            if train_metrics:
+                self._print_env_metrics("\u8bad\u7ec3", train_metrics)
+            else:
+                print("  \u8bad\u7ec3: \u6682\u65e0\u6307\u6807\uff0c\u7b49\u5f85\u63d0\u4ea4 episode \u6570\u636e")
+            if test_metrics:
+                self._print_env_metrics("\u6d4b\u8bd5", test_metrics)
+            elif test_result is not None:
+                print("  \u6d4b\u8bd5: \u6682\u65e0\u6307\u6807\uff0c\u7b49\u5f85\u63d0\u4ea4 episode \u6570\u636e")
         # Q值统计
         print("\n💎 Q值统计:")
         print(f"  Q均值:          {q_mean:>10.3f}")
@@ -220,7 +237,7 @@ class TrainingLogger:
         if violations is not None:
             parts.append(f"平均越界: {violations:.2f}")
         if parts:
-            print(f"  {label}: " + "，".join(parts))
+            print(f"  {label}: " + " | ".join(parts))
     
     def log_compact(
         self,
@@ -332,7 +349,10 @@ class EnhancedTensorboardLogger:
     def __init__(self, writer, total_epochs: int, reward_scale: float = 1.0,
                  log_interval: int = 1, verbose: bool = True, diffusion_steps: int = None,
                  update_log_interval: int = 1, step_per_epoch: int = 1,
-                 metrics_getter: Optional[Callable[[str], Optional[Dict[str, float]]]] = None):
+                 metrics_getter: Optional[Callable[[str], Optional[Dict[str, float]]]] = None,
+                 context_info: Optional[Dict[str, Any]] = None,
+                 train_eval_collector=None,
+                 train_eval_episodes: int = 1):
         """
         初始化增强日志记录器
 
@@ -352,6 +372,7 @@ class EnhancedTensorboardLogger:
             reward_scale,
             diffusion_steps,
             metrics_getter=metrics_getter,
+            context_info=context_info,
         )  # 终端日志格式化器
         self.log_interval = log_interval  # epoch日志输出间隔
         self.verbose = verbose  # 是否详细输出
@@ -363,9 +384,12 @@ class EnhancedTensorboardLogger:
         self._last_train_result = {}
         self._last_test_result = {}
         self._last_update_result = {}
+        self._last_train_eval_result = None
         self._current_epoch = 0
         self._last_output_epoch = -1  # 记录上次输出的epoch，避免重复输出
         self._has_update_data = False  # 标记是否有更新数据
+        self.train_eval_collector = train_eval_collector
+        self.train_eval_episodes = max(1, train_eval_episodes)
 
     def write(self, step_type: str, step: int, data: Dict[str, Any]):
         """
@@ -408,6 +432,18 @@ class EnhancedTensorboardLogger:
         self._last_test_result = collect_result
         # 根据 env_step 推算当前 epoch
         self._current_epoch = max(1, math.ceil(step / self.step_per_epoch))
+
+        # 额外评估训练任务，获得与测试相同标准的训练奖励
+        if self.train_eval_collector is not None:
+            try:
+                self._last_train_eval_result = self.train_eval_collector.collect(
+                    n_episode=self.train_eval_episodes
+                )
+            except Exception as exc:
+                print(f"警告: 训练集评估失败: {exc}")
+                self._last_train_eval_result = None
+        else:
+            self._last_train_eval_result = None
 
         # 输出到终端（测试后输出）
         self._output_to_terminal()
@@ -479,6 +515,18 @@ class EnhancedTensorboardLogger:
         # 合并训练和更新结果
         train_result = self._last_train_result.copy()
         test_result = self._last_test_result.copy() if self._last_test_result else None
+
+        # 如果存在额外的训练集评估结果，则使用其奖励替换原训练奖励，保证可比性
+        if self._last_train_eval_result:
+            eval_reward = self._last_train_eval_result.get(
+                'train/reward',
+                self._last_train_eval_result.get('rew')
+            )
+            if eval_reward is not None:
+                train_result['train/reward'] = eval_reward
+            eval_len = self._last_train_eval_result.get('len')
+            if eval_len is not None:
+                train_result['train/len'] = eval_len
 
         # 输出到终端
         if self.verbose:
