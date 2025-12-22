@@ -12,6 +12,7 @@ RL 基线（SAC）入口文件。
 import argparse
 import os
 import pprint
+import inspect
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -212,12 +213,14 @@ def build_sac_policy(args: argparse.Namespace, env, device: torch.device) -> SAC
         action_shape=action_shape,
         hidden_sizes=[args.hidden_dim, args.hidden_dim],
         device=device,
+        concat=True,
     )
     critic2_backbone = Net(
         state_shape=state_shape,
         action_shape=action_shape,
         hidden_sizes=[args.hidden_dim, args.hidden_dim],
         device=device,
+        concat=True,
     )
     critic1 = Critic(critic1_backbone, device=device).to(device)
     critic2 = Critic(critic2_backbone, device=device).to(device)
@@ -230,26 +233,50 @@ def build_sac_policy(args: argparse.Namespace, env, device: torch.device) -> SAC
     alpha_optim = torch.optim.Adam([log_alpha], lr=args.alpha_lr)
     alpha = (target_entropy, log_alpha, alpha_optim)
 
-    policy = SACPolicy(
-        actor=actor,
-        actor_optim=actor_optim,
-        critic1=critic1,
-        critic1_optim=critic1_optim,
-        critic2=critic2,
-        critic2_optim=critic2_optim,
-        tau=args.tau,
-        gamma=args.gamma,
-        alpha=alpha,
-        reward_normalization=args.reward_normalization,
-        estimation_step=args.n_step,
-        action_space=env.action_space,
-    )
+    sac_params = inspect.signature(SACPolicy.__init__).parameters
+    if "critic1" in sac_params:  # tianshou <= 0.x / early 1.x
+        policy = SACPolicy(
+            actor=actor,
+            actor_optim=actor_optim,
+            critic1=critic1,
+            critic1_optim=critic1_optim,
+            critic2=critic2,
+            critic2_optim=critic2_optim,
+            tau=args.tau,
+            gamma=args.gamma,
+            alpha=alpha,
+            reward_normalization=args.reward_normalization,
+            estimation_step=args.n_step,
+            action_space=env.action_space,
+        )
+    else:  # tianshou >= 1.2
+        policy_kwargs = dict(
+            actor=actor,
+            actor_optim=actor_optim,
+            critic=critic1,
+            critic_optim=critic1_optim,
+            critic2=critic2,
+            critic2_optim=critic2_optim,
+            tau=args.tau,
+            gamma=args.gamma,
+            alpha=alpha,
+            estimation_step=args.n_step,
+            action_space=env.action_space,
+        )
+        if "reward_normalization" in sac_params:
+            policy_kwargs["reward_normalization"] = args.reward_normalization
+        policy = SACPolicy(**policy_kwargs)
     return policy
 
 
 def main():
     args = parse_args()
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+
+    # tianshou 目前不支持 n_step>1 时启用 reward_normalization（会触发 AssertionError）
+    if getattr(args, "reward_normalization", False) and getattr(args, "n_step", 1) > 1:
+        print("Warning: n_step>1 与 reward_normalization 不兼容，已自动关闭 reward_normalization")
+        args.reward_normalization = False
 
     # 随机种子
     np.random.seed(args.seed)
@@ -350,10 +377,25 @@ def main():
     test_collector.reset()
     eval_res = test_collector.collect(n_episode=args.eval_episodes)
     metrics = _aggregate_metrics(test_envs)
+
+    def _extract_eval_stats(res):
+        if isinstance(res, dict):
+            rews = res.get("rews", res.get("returns", res.get("rew")))
+            lens = res.get("lens", res.get("len"))
+            return rews, lens
+        rews = getattr(res, "rews", None)
+        if rews is None:
+            rews = getattr(res, "returns", None)
+        lens = getattr(res, "lens", None)
+        return rews, lens
+
+    eval_rews, eval_lens = _extract_eval_stats(eval_res)
     print("\n评测摘要：")
     print(f"  回合数: {args.eval_episodes}")
-    print(f"  平均奖励: {eval_res['rews'].mean():.4f}")
-    print(f"  平均长度: {eval_res['lens'].mean():.1f}")
+    if eval_rews is not None:
+        print(f"  平均奖励: {np.mean(eval_rews):.4f}")
+    if eval_lens is not None:
+        print(f"  平均长度: {np.mean(eval_lens):.1f}")
     if metrics:
         print("  环境指标 | " + " | ".join(f"{k}: {v:.4f}" for k, v in metrics.items()))
     else:

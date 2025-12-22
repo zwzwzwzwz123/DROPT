@@ -417,6 +417,13 @@ class EnhancedTensorboardLogger:
         """恢复数据（兼容Tianshou的Logger接口）"""
         return self.tb_logger.restore_data()
 
+    def log_info_data(self, log_data: Dict[str, Any], step: int):
+        """记录训练器整体信息（兼容 tianshou>=1.2 的 BaseLogger 接口）。"""
+        if hasattr(self.tb_logger, "log_info_data"):
+            self.tb_logger.log_info_data(log_data, step)
+        else:
+            self.tb_logger.write("info", step, log_data)
+
     def log_test_data(self, collect_result: Dict[str, Any], step: int):
         """
         记录测试数据（兼容Tianshou的Logger接口）
@@ -533,4 +540,3 @@ class EnhancedTensorboardLogger:
             self.training_logger.log_epoch(self._current_epoch, train_result, test_result)
         else:
             self.training_logger.log_compact(self._current_epoch, train_result, test_result)
-
