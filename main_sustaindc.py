@@ -268,6 +268,7 @@ def main(args=None):
         diffusion_steps=args.diffusion_steps,
         update_log_interval=args.log_update_interval,
         step_per_epoch=args.step_per_epoch,
+        png_interval=5,
     )
 
     # ========== 训练辅助回调 ==========

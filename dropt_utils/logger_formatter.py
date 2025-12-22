@@ -572,31 +572,45 @@ class EnhancedTensorboardLogger:
             self.training_logger.log_compact(self._current_epoch, train_result, test_result)
 
         self._log_env_metrics(train_metrics, test_metrics)
+        self._log_basic_scalars(train_result, test_result)
+        self._maybe_save_png(self._current_epoch)
+
+    def _record_metric(self, mode: str, name: str, value: Optional[float], epoch: int, write_tb: bool = True) -> None:
+        if value is None:
+            return
+        if write_tb and self.writer is not None:
+            try:
+                self.writer.add_scalar(f"{mode}/{name}", value, epoch)
+            except Exception as exc:
+                print(f"警告: 写入指标 {mode}/{name} 失败: {exc}")
+        hist = self._metric_history.setdefault(mode, {}).setdefault(name, [])
+        hist.append((epoch, value))
 
     def _log_env_metrics(
         self,
         train_metrics: Optional[Dict[str, float]],
         test_metrics: Optional[Dict[str, float]],
     ) -> None:
-        """写入环境级指标到 TensorBoard。"""
-        if self.writer is None:
-            return
+        """写入环境级指标到 TensorBoard并记录历史。"""
         epoch = self._current_epoch
         for mode, metrics in (("train", train_metrics), ("test", test_metrics)):
             if not metrics:
                 continue
             for name, value in metrics.items():
-                if value is None:
-                    continue
-                try:
-                    self.writer.add_scalar(f"{mode}/{name}", value, epoch)
-                except Exception as exc:
-                    print(f"警告: 写入环境指标 {mode}/{name} 失败: {exc}")
-                # 记录历史用于画图
-                hist = self._metric_history.setdefault(mode, {}).setdefault(name, [])
-                hist.append((epoch, value))
+                self._record_metric(mode, name, value, epoch, write_tb=True)
 
-        self._maybe_save_png(epoch)
+    def _log_basic_scalars(
+        self,
+        train_result: Dict[str, Any],
+        test_result: Optional[Dict[str, Any]],
+    ) -> None:
+        """记录基础标量（奖励等），用于PNG即便环境指标缺失。"""
+        epoch = self._current_epoch
+        train_reward = train_result.get('train/reward', train_result.get('rew', train_result.get('rews')))
+        self._record_metric("train", "reward", train_reward, epoch, write_tb=False)
+        if test_result:
+            test_reward = test_result.get('test/reward', test_result.get('rew', test_result.get('rews')))
+            self._record_metric("test", "reward", test_reward, epoch, write_tb=False)
 
     def _maybe_save_png(self, epoch: int) -> None:
         """根据设定的间隔保存PNG曲线，不影响训练流程。"""
