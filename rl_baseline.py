@@ -161,6 +161,7 @@ def _aggregate_metrics(vector_env) -> Optional[Dict[str, float]]:
         "avg_energy": _avg("avg_energy"),
         "avg_comfort_mean": _avg("avg_comfort_mean"),
         "avg_violations": _avg("avg_violations"),
+        "avg_pue": _avg("avg_pue"),
     }
     return {k: v for k, v in result.items() if v is not None} or None
 
@@ -183,6 +184,7 @@ def make_logger(args: argparse.Namespace, train_envs, test_envs, log_path: str):
         update_log_interval=50,
         step_per_epoch=args.step_per_epoch,
         metrics_getter=metrics_getter,
+        png_interval=5,
     )
 
 

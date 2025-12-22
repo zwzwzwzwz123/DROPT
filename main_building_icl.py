@@ -807,7 +807,7 @@ def main():
         if not values:
             return None
         result = {}
-        for key in ("avg_energy", "avg_comfort_mean", "avg_violations"):
+        for key in ("avg_energy", "avg_comfort_mean", "avg_violations", "avg_pue"):
             nums = [m[key] for m in values if m.get(key) is not None]
             if nums:
                 result[key] = float(np.mean(nums))
@@ -917,6 +917,7 @@ def main():
         },
         train_eval_collector=train_eval_collector,
         train_eval_episodes=args.episode_per_test,
+        png_interval=5,
     )
 
     print("\n" + "=" * 60)

@@ -199,6 +199,34 @@ def main(args=None):
     torch.manual_seed(args.seed)
     train_envs.seed(args.seed)
     test_envs.seed(args.seed)
+
+    def _aggregate_metrics(vector_env):
+        if vector_env is None:
+            return None
+        env_list = getattr(vector_env, "_env_list", None)
+        if not env_list:
+            env_list = getattr(vector_env, "envs", None)
+        if not env_list:
+            return None
+        values = []
+        for env_inst in env_list:
+            consume = getattr(env_inst, "consume_metrics", None)
+            if consume:
+                m = consume()
+                if m:
+                    values.append(m)
+        if not values:
+            return None
+        result = {}
+        for key in ("avg_energy", "avg_pue", "avg_violations"):
+            nums = [m[key] for m in values if m.get(key) is not None]
+            if nums:
+                result[key] = float(np.mean(nums))
+        return result if result else None
+
+    def metrics_getter(mode: str):
+        target_env = train_envs if mode == "train" else test_envs
+        return _aggregate_metrics(target_env)
     
     # ========== 创建Actor网络（扩散模型） ==========
     print("\n[2/6] 初始化Actor网络（扩散模型）...")
@@ -261,7 +289,9 @@ def main(args=None):
         verbose=True,  # True=详细格式，False=紧凑格式
         diffusion_steps=args.n_timesteps,
         update_log_interval=args.log_update_interval,
-        step_per_epoch=args.step_per_epoch
+        step_per_epoch=args.step_per_epoch,
+        metrics_getter=metrics_getter,
+        png_interval=5,
     )
 
     print(f"  ✓ 日志路径: {log_path}")
@@ -386,4 +416,3 @@ def main(args=None):
 
 if __name__ == '__main__':
     main(get_args())
-

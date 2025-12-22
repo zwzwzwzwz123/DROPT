@@ -5,6 +5,7 @@
 
 import time
 import math
+import os
 from typing import Dict, Any, Optional, Callable
 from datetime import datetime, timedelta
 
@@ -86,7 +87,9 @@ class TrainingLogger:
         self,
         epoch: int,
         train_result: Dict[str, Any],
-        test_result: Optional[Dict[str, Any]] = None
+        test_result: Optional[Dict[str, Any]] = None,
+        train_metrics: Optional[Dict[str, float]] = None,
+        test_metrics: Optional[Dict[str, float]] = None,
     ):
         """
         记录并格式化输出一个epoch的训练信息
@@ -95,6 +98,8 @@ class TrainingLogger:
         - epoch: 当前轮次
         - train_result: 训练结果字典
         - test_result: 测试结果字典（可选）
+        - train_metrics: 训练环境指标（可选，已预取）
+        - test_metrics: 测试环境指标（可选，已预取）
         """
         # 计算时间统计
         current_time = time.time()
@@ -181,8 +186,10 @@ class TrainingLogger:
             print(f"  真实测试奖励:   {test_reward/self.reward_scale:>10.2f}")
 
         if self.metrics_getter:
-            train_metrics = self.metrics_getter('train')
-            test_metrics = self.metrics_getter('test')
+            if train_metrics is None:
+                train_metrics = self.metrics_getter('train')
+            if test_metrics is None:
+                test_metrics = self.metrics_getter('test')
             print("\n\U0001f321\ufe0f \u73af\u5883\u6307\u6807:")
             if train_metrics:
                 self._print_env_metrics("\u8bad\u7ec3", train_metrics)
@@ -229,6 +236,7 @@ class TrainingLogger:
         energy = metrics.get('avg_energy')
         comfort = metrics.get('avg_comfort_mean')
         violations = metrics.get('avg_violations')
+        pue = metrics.get('avg_pue')
         parts = []
         if energy is not None:
             parts.append(f"平均能耗: {energy:.2f} kWh")
@@ -236,6 +244,8 @@ class TrainingLogger:
             parts.append(f"平均温差: {comfort:.2f} °C")
         if violations is not None:
             parts.append(f"平均越界: {violations:.2f}")
+        if pue is not None:
+            parts.append(f"PUE: {pue:.3f}")
         if parts:
             print(f"  {label}: " + " | ".join(parts))
     
@@ -352,7 +362,9 @@ class EnhancedTensorboardLogger:
                  metrics_getter: Optional[Callable[[str], Optional[Dict[str, float]]]] = None,
                  context_info: Optional[Dict[str, Any]] = None,
                  train_eval_collector=None,
-                 train_eval_episodes: int = 1):
+                 train_eval_episodes: int = 1,
+                 png_interval: int = 0,
+                 png_dir: Optional[str] = None):
         """
         初始化增强日志记录器
 
@@ -379,6 +391,8 @@ class EnhancedTensorboardLogger:
         self.writer = writer  # TensorBoard writer
         self.update_log_interval = max(1, update_log_interval)  # 梯度日志抽样间隔
         self.step_per_epoch = max(1, step_per_epoch)
+        self.png_interval = max(0, png_interval)  # 生成PNG的间隔（epoch），0表示关闭
+        self.png_dir = png_dir or getattr(writer, "log_dir", None)
 
         # 初始化结果缓存
         self._last_train_result = {}
@@ -390,6 +404,7 @@ class EnhancedTensorboardLogger:
         self._has_update_data = False  # 标记是否有更新数据
         self.train_eval_collector = train_eval_collector
         self.train_eval_episodes = max(1, train_eval_episodes)
+        self._metric_history: Dict[str, Dict[str, list]] = {"train": {}, "test": {}}
 
     def write(self, step_type: str, step: int, data: Dict[str, Any]):
         """
@@ -535,8 +550,90 @@ class EnhancedTensorboardLogger:
             if eval_len is not None:
                 train_result['train/len'] = eval_len
 
+        train_metrics = None
+        test_metrics = None
+        if self.training_logger.metrics_getter:
+            try:
+                train_metrics = self.training_logger.metrics_getter("train")
+                test_metrics = self.training_logger.metrics_getter("test")
+            except Exception as exc:
+                print(f"警告: 获取环境指标失败 {exc}")
+
         # 输出到终端
         if self.verbose:
-            self.training_logger.log_epoch(self._current_epoch, train_result, test_result)
+            self.training_logger.log_epoch(
+                self._current_epoch,
+                train_result,
+                test_result,
+                train_metrics=train_metrics,
+                test_metrics=test_metrics,
+            )
         else:
             self.training_logger.log_compact(self._current_epoch, train_result, test_result)
+
+        self._log_env_metrics(train_metrics, test_metrics)
+
+    def _log_env_metrics(
+        self,
+        train_metrics: Optional[Dict[str, float]],
+        test_metrics: Optional[Dict[str, float]],
+    ) -> None:
+        """写入环境级指标到 TensorBoard。"""
+        if self.writer is None:
+            return
+        epoch = self._current_epoch
+        for mode, metrics in (("train", train_metrics), ("test", test_metrics)):
+            if not metrics:
+                continue
+            for name, value in metrics.items():
+                if value is None:
+                    continue
+                try:
+                    self.writer.add_scalar(f"{mode}/{name}", value, epoch)
+                except Exception as exc:
+                    print(f"警告: 写入环境指标 {mode}/{name} 失败: {exc}")
+                # 记录历史用于画图
+                hist = self._metric_history.setdefault(mode, {}).setdefault(name, [])
+                hist.append((epoch, value))
+
+        self._maybe_save_png(epoch)
+
+    def _maybe_save_png(self, epoch: int) -> None:
+        """根据设定的间隔保存PNG曲线，不影响训练流程。"""
+        if self.png_interval <= 0:
+            return
+        if epoch % self.png_interval != 0:
+            return
+        try:
+            import matplotlib.pyplot as plt  # type: ignore
+        except Exception as exc:
+            print(f"警告: matplotlib 不可用，无法生成PNG: {exc}")
+            return
+
+        save_dir = self.png_dir or "."
+        save_dir = os.path.join(save_dir, "figs")
+        os.makedirs(save_dir, exist_ok=True)
+
+        for mode, metrics_dict in self._metric_history.items():
+            for metric_name, series in metrics_dict.items():
+                if not series:
+                    continue
+                xs, ys = zip(*series)
+                plt.figure(figsize=(5, 3))
+                plt.plot(xs, ys, label=f"{mode}-{metric_name}", color="#1f77b4")
+                plt.xlabel("Epoch")
+                plt.ylabel(metric_name)
+                plt.title(f"{metric_name} ({mode})")
+                plt.grid(True, alpha=0.3)
+                plt.legend()
+                plt.ylim(bottom=0)  # 统一从0起始，便于对比
+                safe_name = metric_name.replace("/", "_")
+                fname = f"{mode}_{safe_name}_epoch{epoch:05d}.png"
+                fpath = os.path.join(save_dir, fname)
+                try:
+                    plt.tight_layout()
+                    plt.savefig(fpath, dpi=150)
+                except Exception as exc:
+                    print(f"警告: 保存PNG失败 {fpath}: {exc}")
+                finally:
+                    plt.close()

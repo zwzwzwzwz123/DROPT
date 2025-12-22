@@ -236,7 +236,8 @@ def main():
         diffusion_steps=args.diffusion_steps,  # 扩散模型步数
         update_log_interval=args.log_update_interval,
         step_per_epoch=args.step_per_epoch,
-        metrics_getter=None  # placeholder, will be replaced later
+        metrics_getter=None,  # placeholder, will be replaced later
+        png_interval=5,
     )
     
     # 打印配置
@@ -300,7 +301,7 @@ def main():
         if not values:
             return None
         result = {}
-        for key in ('avg_energy', 'avg_comfort_mean', 'avg_violations'):
+        for key in ('avg_energy', 'avg_comfort_mean', 'avg_violations', 'avg_pue'):
             nums = [m[key] for m in values if m.get(key) is not None]
             if nums:
                 result[key] = float(np.mean(nums))
@@ -466,4 +467,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
