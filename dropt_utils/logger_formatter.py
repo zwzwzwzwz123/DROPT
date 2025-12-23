@@ -651,3 +651,39 @@ class EnhancedTensorboardLogger:
                     print(f"警告: 保存PNG失败 {fpath}: {exc}")
                 finally:
                     plt.close()
+
+        reward_series = {}
+        for mode in ("train", "test"):
+            series = self._metric_history.get(mode, {}).get("reward")
+            if series:
+                reward_series[mode] = series
+
+        if reward_series:
+            plt.figure(figsize=(5, 3))
+            y_values = []
+            for mode, series in reward_series.items():
+                xs, ys = zip(*series)
+                y_values.extend(ys)
+                plt.plot(xs, ys, label=f"{mode}-reward")
+            plt.xlabel("Epoch")
+            plt.ylabel("reward")
+            plt.title("Reward (train vs test)")
+            plt.grid(True, alpha=0.3)
+            plt.legend()
+            if y_values:
+                ymin = min(y_values)
+                ymax = max(y_values)
+                if ymin == ymax:
+                    ymin -= 1.0
+                span = abs(ymax - ymin)
+                margin = 0.05 * span if span > 0 else 1.0
+                # 奖励通常为负，将0作为上界，向下预留一定空白
+                plt.ylim(bottom=ymin - margin, top=0)
+            reward_path = os.path.join(save_dir, f"reward_epoch{epoch:05d}.png")
+            try:
+                plt.tight_layout()
+                plt.savefig(reward_path, dpi=150)
+            except Exception as exc:
+                print(f"警告: 保存奖励PNG失败 {reward_path}: {exc}")
+            finally:
+                plt.close()
