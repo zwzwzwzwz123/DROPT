@@ -108,8 +108,8 @@ def get_args():
                         help='行为克隆损失初始权重（默认0.8）')
     parser.add_argument('--bc-weight-final', type=float, default=0.1,
                         help='BC权重最终值（默认0.1，逐渐过渡到策略梯度）')
-    parser.add_argument('--bc-weight-decay-steps', type=int, default=50000,
-                        help='BC权重线性衰减步数（默认5万步）')
+    parser.add_argument('--bc-weight-decay-steps', type=int, default=150000,
+                        help='BC权重线性衰减步数（默认15万步，延长专家引导）')
     
     # ========== 基础训练参数（使用配置常量作为默认值） ==========
     parser.add_argument('--exploration-noise', type=float, default=DEFAULT_EXPLORATION_NOISE,
@@ -411,6 +411,20 @@ def main():
     )
 
     test_collector = Collector(policy, test_envs)
+
+    # 仅在前 warmup_steps 关闭采集噪声，之后恢复默认噪声
+    warmup_noise_steps = 250_000
+
+    def train_fn(epoch: int, env_step: int):
+        """动态切换采集噪声：前 warmup_steps 关闭，之后开启。"""
+        if not hasattr(train_collector, "exploration_noise"):
+            return
+        enable_noise = env_step >= warmup_noise_steps
+        # 仅在状态变化时更新，避免反复赋值
+        if train_collector.exploration_noise != enable_noise:
+            train_collector.exploration_noise = enable_noise
+            status = "开启" if enable_noise else "关闭"
+            print(f"[train_fn] env_step={env_step}: 已{status}采集噪声")
     
     print(f"✓ 收集器创建成功")
     print(f"  训练环境数: {args.training_num}")
@@ -452,6 +466,7 @@ def main():
             },
             os.path.join(log_path, f'checkpoint_{epoch}.pth')
         ) if epoch % args.save_interval == 0 else None,
+        train_fn=train_fn,
     )
     
     # ========== 训练完成 ==========
