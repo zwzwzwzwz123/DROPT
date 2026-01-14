@@ -123,6 +123,13 @@ class RectifiedFlow(nn.Module):
         self._lpips_net = net
         return net
 
+    def _can_use_lpips(self, x: torch.Tensor) -> bool:
+        # LPIPS 期望 [B,C,H,W] 且 H,W>=32；否则容易因池化失败报错
+        if x.dim() != 4:
+            return False
+        _, _, h, w = x.shape
+        return h >= 32 and w >= 32
+
     # ------------------------------------------------------------------ #
     # Training: velocity matching / reflow distillation
     # ------------------------------------------------------------------ #
@@ -162,17 +169,17 @@ class RectifiedFlow(nn.Module):
 
         if self.reflow_flag and "lpips" in self.reflow_loss:
             lpips_net = self._maybe_init_lpips(device)
-            if lpips_net is None:
-                # 回退 L2，避免缺失依赖导致崩溃
-                lpips_loss = 0.0
+            use_lpips = lpips_net is not None and self._can_use_lpips(target_x0)
+            if use_lpips:
+                lpips_loss = lpips_net(z0 + pred_velocity, target_x0).view(batch_size, -1)
             else:
-                lpips_loss = lpips_net(z0 + pred_velocity, target_x0)
-                lpips_loss = lpips_loss.view(batch_size, -1)
+                lpips_loss = None  # 回退 L2，避免输入维度不符或缺依赖
+
             l2_loss = self.loss_fn(pred_velocity, target_velocity, weight_tensor)
             if self.reflow_loss == "lpips":
-                return lpips_loss.mean()
+                return l2_loss if lpips_loss is None else lpips_loss.mean()
             if self.reflow_loss == "lpips+l2":
-                lpips_mean = lpips_loss.mean() if torch.is_tensor(lpips_loss) else 0.0
+                lpips_mean = 0.0 if lpips_loss is None else lpips_loss.mean()
                 return lpips_mean + l2_loss
             raise NotImplementedError(f"reflow_loss {self.reflow_loss} 未实现")
 
