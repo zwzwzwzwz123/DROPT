@@ -35,9 +35,10 @@ def _parse_rf_args():
     import argparse
 
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--rf-time-scale", type=float, default=999.0, help="时间缩放，论文默认 999")
-    parser.add_argument("--rf-noise-scale", type=float, default=1.0, help="初始噪声尺度")
-    parser.add_argument("--rf-sigma-var", type=float, default=0.0, help="sigma_t=(1-t)*sigma_var")
+    # 调低默认时间缩放 + 噪声，减少高频抖动；默认步数与 diffusion_steps 对齐以提速
+    parser.add_argument("--rf-time-scale", type=float, default=10.0, help="时间缩放，论文默认 999")
+    parser.add_argument("--rf-noise-scale", type=float, default=0.5, help="初始噪声尺度")
+    parser.add_argument("--rf-sigma-var", type=float, default=0.05, help="sigma_t=(1-t)*sigma_var")
     parser.add_argument("--rf-sampler", type=str, default="euler", choices=["euler", "rk45"], help="采样器")
     parser.add_argument("--rf-sample-N", type=int, default=None, help="采样步数覆盖（None=diffusion_steps）")
     parser.add_argument("--rf-reflow", action="store_true", default=False, help="启用 reflow/蒸馏（需要教师数据）")
@@ -69,14 +70,25 @@ def get_args():
     rf_args = rf_parsed
     # Make runs distinguishable from the DDPM-based pipeline.
     if args.log_prefix == "default":
-        args.log_prefix = "rectified_flow"
+        # 与 DDPM/其他版本区分的默认前缀
+        args.log_prefix = "rectified_flow_mpc"
+    # 默认使用 CPU；如需 GPU 请在命令行显式指定 --device cuda:0/1
+    if args.device == "cuda:0":
+        args.device = "cpu"
     args.algorithm = "rectified_flow_opt"
+    # 默认开启专家模仿：若未指定则启用 MPC + BC 引导
+    if args.expert_type is None:
+        args.expert_type = "mpc"
+    args.bc_coef = True
+    # 训练/采样步数默认压缩，提升速度；仅在用户未手动指定时生效
+    if args.diffusion_steps >= 10:  # 默认 10
+        args.diffusion_steps = 6
     # attach RF configs
     args.rf_time_scale = rf_args.rf_time_scale
     args.rf_noise_scale = rf_args.rf_noise_scale
     args.rf_sigma_var = rf_args.rf_sigma_var
     args.rf_sampler = rf_args.rf_sampler
-    args.rf_sample_N = rf_args.rf_sample_N
+    args.rf_sample_N = rf_args.rf_sample_N or args.diffusion_steps
     args.rf_reflow = rf_args.rf_reflow
     args.rf_reflow_t_schedule = (
         rf_args.rf_reflow_t_schedule if not rf_args.rf_reflow_t_schedule.isdigit() else int(rf_args.rf_reflow_t_schedule)
@@ -257,7 +269,8 @@ def main():
     train_collector = Collector(policy, train_envs, replay_buffer, exploration_noise=True)
     test_collector = Collector(policy, test_envs)
 
-    warmup_noise_steps = 250_000
+    # 更长的 warmup：在专家引导阶段关闭额外探索噪声，稳定收敛
+    warmup_noise_steps = 200_000
 
     def train_fn(epoch: int, env_step: int):
         if not hasattr(train_collector, "exploration_noise"):
