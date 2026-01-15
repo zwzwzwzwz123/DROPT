@@ -80,9 +80,9 @@ def get_args():
     if args.expert_type is None:
         args.expert_type = "mpc"
     args.bc_coef = True
-    # 训练/采样步数默认压缩，提升速度；仅在用户未手动指定时生效
+    # 训练/采样步数进一步压缩，提升速度；仅在用户未手动指定时生效
     if args.diffusion_steps >= 10:  # 默认 10
-        args.diffusion_steps = 6
+        args.diffusion_steps = 2
     # attach RF configs
     args.rf_time_scale = rf_args.rf_time_scale
     args.rf_noise_scale = rf_args.rf_noise_scale
