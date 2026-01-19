@@ -55,6 +55,11 @@ def get_args():
         args.log_prefix = "diffusion_fno"
     args.algorithm = "diffusion_fno"
 
+    # 默认开启专家模式 + BC，引导收敛（与 rectified_flow 脚本保持一致的做法）
+    if args.expert_type is None:
+        args.expert_type = "mpc"
+    args.bc_coef = True
+
     # 挂载 FNO 参数
     args.fno_modes = fno_args.fno_modes
     args.fno_width = fno_args.fno_width
