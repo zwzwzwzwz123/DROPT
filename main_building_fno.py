@@ -1,105 +1,80 @@
 """
-BEAR building training entry that swaps the DDPM actor for a Rectified Flow actor.
+BEAR 建筑环境：扩散策略 + DiffFNO 去噪骨干。
 
-This keeps the rest of the training stack intact (collectors, critic, logger)
-while isolating the new flow-based policy in a separate script to avoid
-impacting existing runs.
+保持原训练/日志流程不变，仅替换 actor backbone：
+- actor backbone: DiffFNO（频域低通 + 残差直通）
+- 其余组件：与 main_building 保持一致，避免影响原脚本
 """
 
 import os
 import pprint
+import sys
 import warnings
 from datetime import datetime
 
 import numpy as np
 import torch
-import sys
 from tianshou.data import Collector, PrioritizedVectorReplayBuffer, VectorReplayBuffer
 from torch.utils.tensorboard import SummaryWriter
 
-# Reuse the original argument definitions from main_building.
 from main_building import get_args as base_get_args
 
 from dropt_utils.logger_formatter import EnhancedTensorboardLogger
 from dropt_utils.tianshou_compat import offpolicy_trainer
 from env.building_env_wrapper import make_building_env
 from policy import DiffusionOPT
-from diffusion.model import DoubleCritic, MLP
-from diffusion.rectified_flow import RectifiedFlow
+from diffusion import Diffusion
+from diffusion.model import DoubleCritic
+from diffusion.model_fno import DiffFNO
 
 warnings.filterwarnings("ignore")
 
 
-def _parse_rf_args():
-    """RF 专属参数（不修改原 main_building）"""
+def _parse_fno_args():
+    """仅解析 FNO 特定参数，避免干扰原始 CLI。"""
     import argparse
 
     parser = argparse.ArgumentParser(add_help=False)
-    # 调低默认时间缩放 + 噪声，减少高频抖动；默认步数与 diffusion_steps 对齐以提速
-    parser.add_argument("--rf-time-scale", type=float, default=10.0, help="时间缩放，论文默认 999")
-    parser.add_argument("--rf-noise-scale", type=float, default=0.5, help="初始噪声尺度")
-    parser.add_argument("--rf-sigma-var", type=float, default=0.05, help="sigma_t=(1-t)*sigma_var")
-    parser.add_argument("--rf-sampler", type=str, default="euler", choices=["euler", "rk45"], help="采样器")
-    parser.add_argument("--rf-sample-N", type=int, default=None, help="采样步数覆盖（None=diffusion_steps）")
-    parser.add_argument("--rf-reflow", action="store_true", default=False, help="启用 reflow/蒸馏（需要教师数据）")
-    parser.add_argument(
-        "--rf-reflow-t-schedule",
-        type=str,
-        default="uniform",
-        help="reflow 时间调度：t0/t1/uniform/整数k",
-    )
-    parser.add_argument(
-        "--rf-reflow-loss",
-        type=str,
-        default="l2",
-        choices=["l2", "lpips", "lpips+l2"],
-        help="reflow 损失类型（LPIPS 需 pip install lpips）",
-    )
-    args, _ = parser.parse_known_args()
-    return args, parser
+    parser.add_argument("--fno-modes", type=int, default=8, help="保留的低频数量（越大越保留高频）")
+    parser.add_argument("--fno-width", type=int, default=64, help="频域通道宽度")
+    parser.add_argument("--fno-layers", type=int, default=2, help="谱卷积层数")
+    parser.add_argument("--fno-activation", type=str, default="mish", choices=["mish", "relu"], help="激活函数")
+    return parser.parse_known_args()
 
 
 def get_args():
     saved_argv = sys.argv
-    rf_args, rf_parser = _parse_rf_args()
-    # 先从 sys.argv 中提取 RF 参数，其余交给 base_get_args
-    rf_parsed, remaining = rf_parser.parse_known_args(saved_argv[1:])
+    fno_args, remaining = _parse_fno_args()
+    # 去掉 FNO 私有参数后复用原 parser
     sys.argv = [saved_argv[0]] + remaining
     args = base_get_args()
     sys.argv = saved_argv
-    rf_args = rf_parsed
-    # Make runs distinguishable from the DDPM-based pipeline.
+
+    # 让日志前缀能与原版区分
     if args.log_prefix == "default":
-        # 与 DDPM/其他版本区分的默认前缀
-        args.log_prefix = "rectified_flow_mpc"
-    # 默认使用 CPU；如需 GPU 请在命令行显式指定 --device cuda:0/1
-    if args.device == "cuda:0":
-        args.device = "cpu"
-    args.algorithm = "rectified_flow_opt"
-    # 默认开启专家模仿：若未指定则启用 MPC + BC 引导
+        args.log_prefix = "diffusion_fno"
+    args.algorithm = "diffusion_fno"
+
+    # 默认开启专家模式 + BC，引导收敛（与 rectified_flow 脚本保持一致的做法）
     if args.expert_type is None:
         args.expert_type = "mpc"
     args.bc_coef = True
-    # 训练/采样步数进一步压缩，提升速度；仅在用户未手动指定时生效
-    if args.diffusion_steps >= 10:  # 默认 10
-        args.diffusion_steps = 2
-    # attach RF configs
-    args.rf_time_scale = rf_args.rf_time_scale
-    args.rf_noise_scale = rf_args.rf_noise_scale
-    args.rf_sigma_var = rf_args.rf_sigma_var
-    args.rf_sampler = rf_args.rf_sampler
-    args.rf_sample_N = rf_args.rf_sample_N or args.diffusion_steps
-    args.rf_reflow = rf_args.rf_reflow
-    args.rf_reflow_t_schedule = (
-        rf_args.rf_reflow_t_schedule if not rf_args.rf_reflow_t_schedule.isdigit() else int(rf_args.rf_reflow_t_schedule)
-    )
-    args.rf_reflow_loss = rf_args.rf_reflow_loss
+
+    # 挂载 FNO 参数
+    args.fno_modes = fno_args.fno_modes
+    args.fno_width = fno_args.fno_width
+    args.fno_layers = fno_args.fno_layers
+    args.fno_activation = fno_args.fno_activation
     return args
 
 
 def main():
     args = get_args()
     args.device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+
+    if getattr(args, "reward_normalization", False) and getattr(args, "n_step", 1) > 1:
+        print("Warning: n_step>1 与奖励归一化不兼容，已自动关闭 reward_normalization")
+        args.reward_normalization = False
 
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -124,13 +99,12 @@ def main():
     )
 
     print("\n" + "=" * 60)
-    print("  BEAR Building + Rectified Flow")
+    print("  BEAR Building + DiffFNO (Diffusion)")
     print("=" * 60)
     pprint.pprint(vars(args))
-    print(f"采样器: {args.rf_sampler}, flow_steps={args.diffusion_steps}, time_scale={args.rf_time_scale}")
     print()
 
-    # Environment ---------------------------------------------------------
+    # 环境 ---------------------------------------------------------------
     print("Creating BEAR environments ...")
     expert_kwargs = None
     if args.expert_type:
@@ -185,52 +159,55 @@ def main():
 
     logger.training_logger.metrics_getter = metrics_getter
 
-    # Networks ------------------------------------------------------------
-    print("\nBuilding networks ...")
+    # 网络 ---------------------------------------------------------------
+    print("\nBuilding DiffFNO backbone ...")
     state_dim = env.state_dim
     action_dim = env.action_dim
     max_action = 1.0
 
-    velocity_net = MLP(
+    fno_backbone = DiffFNO(
         state_dim=state_dim,
         action_dim=action_dim,
-        hidden_dim=args.hidden_dim,
+        width=args.fno_width,
+        modes=args.fno_modes,
+        n_layers=args.fno_layers,
         t_dim=16,
+        activation=args.fno_activation,
     ).to(args.device)
 
-    actor = RectifiedFlow(
+    actor_optim = torch.optim.Adam(
+        fno_backbone.parameters(),
+        lr=args.actor_lr,
+        weight_decay=args.wd,
+    )
+
+    diffusion_actor = Diffusion(
         state_dim=state_dim,
         action_dim=action_dim,
-        model=velocity_net,
+        model=fno_backbone,
         max_action=max_action,
+        beta_schedule=args.beta_schedule,
         n_timesteps=args.diffusion_steps,
-        loss_type="l2",
-        time_scale=args.rf_time_scale,
-        noise_scale=args.rf_noise_scale,
-        use_ode_sampler=args.rf_sampler,
-        sigma_var=args.rf_sigma_var,
-        sample_N=args.rf_sample_N,
-        reflow_flag=args.rf_reflow,
-        reflow_t_schedule=args.rf_reflow_t_schedule,
-        reflow_loss=args.rf_reflow_loss,
     ).to(args.device)
-
-    actor_optim = torch.optim.Adam(actor.parameters(), lr=args.actor_lr, weight_decay=args.wd)
 
     critic = DoubleCritic(
         state_dim=state_dim,
         action_dim=action_dim,
         hidden_dim=args.hidden_dim,
     ).to(args.device)
-    critic_optim = torch.optim.Adam(critic.parameters(), lr=args.critic_lr, weight_decay=args.wd)
+    critic_optim = torch.optim.Adam(
+        critic.parameters(),
+        lr=args.critic_lr,
+        weight_decay=args.wd,
+    )
 
-    print(f"  Velocity net params: {sum(p.numel() for p in velocity_net.parameters()):,}")
+    print(f"  DiffFNO params: {sum(p.numel() for p in fno_backbone.parameters()):,}")
     print(f"  Critic params: {sum(p.numel() for p in critic.parameters()):,}")
 
-    # Policy --------------------------------------------------------------
+    # 策略 ---------------------------------------------------------------
     policy = DiffusionOPT(
         state_dim=state_dim,
-        actor=actor,
+        actor=diffusion_actor,
         actor_optim=actor_optim,
         action_dim=action_dim,
         critic=critic,
@@ -251,9 +228,9 @@ def main():
     )
 
     print("\nPolicy ready")
-    print(f"  algorithm={args.algorithm}, flow_steps={args.diffusion_steps}, sampler={args.rf_sampler}")
+    print(f"  algorithm={args.algorithm}, diffusion_steps={args.diffusion_steps}, fno_modes={args.fno_modes}")
 
-    # Replay buffers & collectors ----------------------------------------
+    # 缓冲与采集器 -------------------------------------------------------
     print("\nPreparing collectors ...")
     buffer_num = max(1, args.training_num)
     if args.prioritized_replay:
@@ -269,8 +246,7 @@ def main():
     train_collector = Collector(policy, train_envs, replay_buffer, exploration_noise=True)
     test_collector = Collector(policy, test_envs)
 
-    # 更长的 warmup：在专家引导阶段关闭额外探索噪声，稳定收敛
-    warmup_noise_steps = 200_000
+    warmup_noise_steps = 250_000
 
     def train_fn(epoch: int, env_step: int):
         if not hasattr(train_collector, "exploration_noise"):
@@ -283,9 +259,9 @@ def main():
 
     print(f"Replay buffer: {args.buffer_size:,} ({'PER' if args.prioritized_replay else 'uniform'})")
 
-    # Training -----------------------------------------------------------
+    # 训练 ---------------------------------------------------------------
     print("\n" + "=" * 60)
-    print("  Start training (Rectified Flow)")
+    print("  Start training (Diffusion + DiffFNO)")
     print("=" * 60)
 
     result = offpolicy_trainer(
@@ -302,7 +278,7 @@ def main():
         logger=logger,
         save_best_fn=lambda policy: torch.save(
             policy.state_dict(),
-            os.path.join(log_path, "policy_best_rf.pth"),
+            os.path.join(log_path, "policy_best_fno.pth"),
         ),
         save_checkpoint_fn=lambda epoch, env_step, gradient_step: torch.save(
             {
@@ -319,7 +295,7 @@ def main():
 
     print("\nTraining finished")
     pprint.pprint(result)
-    torch.save(policy.state_dict(), os.path.join(log_path, "policy_final_rf.pth"))
+    torch.save(policy.state_dict(), os.path.join(log_path, "policy_final_fno.pth"))
     print(f"Saved final model to: {log_path}")
 
 
