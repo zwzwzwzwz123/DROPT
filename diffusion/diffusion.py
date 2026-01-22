@@ -40,7 +40,8 @@ class Diffusion(nn.Module):
     """
     def __init__(self, state_dim, action_dim, model, max_action,
                  beta_schedule='vp', n_timesteps=5,
-                 loss_type='l2', clip_denoised=True, bc_coef=False):
+                 loss_type='l2', clip_denoised=True, bc_coef=False,
+                 guidance_scale: float = 0.0, guidance_fn=None):
         super(Diffusion, self).__init__()
 
         # ========== 基础属性 ==========
@@ -69,6 +70,9 @@ class Diffusion(nn.Module):
         self.n_timesteps = int(n_timesteps)    # 总步数
         self.clip_denoised = clip_denoised     # 是否裁剪
         self.bc_coef = bc_coef                 # 训练模式
+        # Guidance 设置：采样阶段可注入外部梯度（如安全/约束引导）
+        self.guidance_scale = guidance_scale
+        self.guidance_fn = guidance_fn
 
         # ========== 注册为缓冲区（不参与梯度更新） ==========
         self.register_buffer('betas', betas)
@@ -169,6 +173,13 @@ class Diffusion(nn.Module):
         """
         # 通过模型预测并重建原始动作
         x_recon = self.predict_start_from_noise(x, t=t, noise=self.model(x, t, s))
+
+        # Guidance（可选）：利用外部梯度对 x_recon 做一步校正
+        if self.guidance_fn is not None and self.guidance_scale > 0:
+            x_recon_detached = x_recon.detach().requires_grad_(True)
+            guidance = self.guidance_fn(x_recon_detached, s, t)
+            if guidance is not None:
+                x_recon = (x_recon_detached - self.guidance_scale * guidance).detach()
 
         # 裁剪到合理范围
         if self.clip_denoised:
@@ -376,3 +387,13 @@ class Diffusion(nn.Module):
         推理时调用，返回最终生成的动作
         """
         return self.sample(state, *args, **kwargs)
+
+    # ==================== Guidance 配置 ====================
+    def set_guidance(self, guidance_fn, guidance_scale: float):
+        """
+        配置采样阶段的指导项（如安全/约束引导）。
+        guidance_fn: callable(x_recon, state, t) -> grad 张量（与动作同形状）
+        guidance_scale: 缩放系数；<=0 时等价于关闭
+        """
+        self.guidance_fn = guidance_fn
+        self.guidance_scale = max(0.0, float(guidance_scale))

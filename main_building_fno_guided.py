@@ -1,9 +1,10 @@
 """
-BEAR 建筑环境：扩散策略 + DiffFNO 去噪骨干。
+BEAR 建筑环境：扩散策略 + DiffFNO + Critic Guidance（安全/性能引导）。
 
-保持原训练/日志流程不变，仅替换 actor backbone：
-- actor backbone: DiffFNO（频域低通 + 残差直通）
-- 其余组件：与 main_building 保持一致，避免影响原脚本
+在 main_building_fno 基础上：
+- 增加 guidance_scale/类型参数，默认 0（不启用）。
+- guidance_fn 默认使用 critic 的 Q 梯度作为引导（提升回报=减少违规）。
+保持原训练逻辑，作为独立脚本，不影响现有流程。
 """
 
 import os
@@ -11,6 +12,7 @@ import pprint
 import sys
 import warnings
 from datetime import datetime
+from typing import Callable, Optional
 
 import numpy as np
 import torch
@@ -31,40 +33,45 @@ warnings.filterwarnings("ignore")
 
 
 def _parse_fno_args():
-    """仅解析 FNO 特定参数，避免干扰原始 CLI。"""
+    """仅解析 FNO / guidance 特定参数，避免干扰原始 CLI。"""
     import argparse
 
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--fno-modes", type=int, default=4, help="保留的低频数量（越大越保留高频）")
+    parser.add_argument("--fno-modes", type=int, default=4, help="保留的低频数量")
     parser.add_argument("--fno-width", type=int, default=48, help="频域通道宽度")
     parser.add_argument("--fno-layers", type=int, default=1, help="谱卷积层数")
     parser.add_argument("--fno-activation", type=str, default="mish", choices=["mish", "relu"], help="激活函数")
+    parser.add_argument("--guidance-scale", type=float, default=0.0, help="采样引导强度（0 关闭）")
+    parser.add_argument(
+        "--guidance-type", type=str, default="critic", choices=["critic"], help="引导类型，当前支持 critic 梯度"
+    )
     return parser.parse_known_args()
 
 
 def get_args():
     saved_argv = sys.argv
     fno_args, remaining = _parse_fno_args()
-    # 去掉 FNO 私有参数后复用原 parser
+    # 去掉 FNO/引导 私有参数后复用原 parser
     sys.argv = [saved_argv[0]] + remaining
     args = base_get_args()
     sys.argv = saved_argv
 
-    # 让日志前缀能与原版区分
     if args.log_prefix == "default":
-        args.log_prefix = "diffusion_fno"
-    args.algorithm = "diffusion_fno"
+        args.log_prefix = "diffusion_fno_guided"
+    args.algorithm = "diffusion_fno_guided"
 
-    # 默认开启专家模式 + BC，引导收敛（与 rectified_flow 脚本保持一致的做法）
+    # 默认开启专家模式 + BC（与 rectified_flow 脚本一致）
     if args.expert_type is None:
         args.expert_type = "mpc"
     args.bc_coef = True
 
-    # 挂载 FNO 参数
+    # 挂载 FNO / guidance 参数
     args.fno_modes = fno_args.fno_modes
     args.fno_width = fno_args.fno_width
     args.fno_layers = fno_args.fno_layers
     args.fno_activation = fno_args.fno_activation
+    args.guidance_scale = fno_args.guidance_scale
+    args.guidance_type = fno_args.guidance_type
     # 覆盖默认运行超参以加速实验
     args.diffusion_steps = 6
     args.training_num = 1
@@ -73,6 +80,26 @@ def get_args():
     args.step_per_collect = 1024
     args.log_update_interval = 200
     return args
+
+
+def build_guidance_fn(critic: DoubleCritic, device: torch.device) -> Callable:
+    """
+    使用 critic 的 Q 梯度做引导：沿着提升 Q 的方向调整动作。
+    返回 grad 张量，与动作同形状。
+    """
+
+    def guidance(x_recon: torch.Tensor, state: torch.Tensor, t: torch.Tensor) -> Optional[torch.Tensor]:
+        # x_recon/state 已在采样设备上
+        critic.eval()
+        x_recon.requires_grad_(True)
+        with torch.enable_grad():
+            q1, q2 = critic(state, x_recon)
+            q = torch.min(q1, q2).mean()
+            grad = torch.autograd.grad(q, x_recon, retain_graph=False, create_graph=False)[0]
+        # 取反是为了在 Diffusion 内的 x - scale * guidance 中实现“朝提升 Q 的方向走”
+        return -grad.detach()
+
+    return guidance
 
 
 def main():
@@ -106,7 +133,7 @@ def main():
     )
 
     print("\n" + "=" * 60)
-    print("  BEAR Building + DiffFNO (Diffusion)")
+    print("  BEAR Building + DiffFNO + Guidance")
     print("=" * 60)
     pprint.pprint(vars(args))
     print()
@@ -188,15 +215,6 @@ def main():
         weight_decay=args.wd,
     )
 
-    diffusion_actor = Diffusion(
-        state_dim=state_dim,
-        action_dim=action_dim,
-        model=fno_backbone,
-        max_action=max_action,
-        beta_schedule=args.beta_schedule,
-        n_timesteps=args.diffusion_steps,
-    ).to(args.device)
-
     critic = DoubleCritic(
         state_dim=state_dim,
         action_dim=action_dim,
@@ -207,6 +225,25 @@ def main():
         lr=args.critic_lr,
         weight_decay=args.wd,
     )
+
+    diffusion_actor = Diffusion(
+        state_dim=state_dim,
+        action_dim=action_dim,
+        model=fno_backbone,
+        max_action=max_action,
+        beta_schedule=args.beta_schedule,
+        n_timesteps=args.diffusion_steps,
+        guidance_scale=args.guidance_scale,
+        guidance_fn=None,  # 下面按需要注入
+    ).to(args.device)
+
+    # 配置 guidance（仅当 scale > 0）
+    if args.guidance_scale > 0 and args.guidance_type == "critic":
+        guidance_fn = build_guidance_fn(critic, args.device)
+        diffusion_actor.set_guidance(guidance_fn, args.guidance_scale)
+        print(f"Guidance enabled: type={args.guidance_type}, scale={args.guidance_scale}")
+    else:
+        print("Guidance disabled (scale <= 0)")
 
     print(f"  DiffFNO params: {sum(p.numel() for p in fno_backbone.parameters()):,}")
     print(f"  Critic params: {sum(p.numel() for p in critic.parameters()):,}")
@@ -235,7 +272,10 @@ def main():
     )
 
     print("\nPolicy ready")
-    print(f"  algorithm={args.algorithm}, diffusion_steps={args.diffusion_steps}, fno_modes={args.fno_modes}")
+    print(
+        f"  algorithm={args.algorithm}, diffusion_steps={args.diffusion_steps}, "
+        f"fno_modes={args.fno_modes}, guidance_scale={args.guidance_scale}"
+    )
 
     # 缓冲与采集器 -------------------------------------------------------
     print("\nPreparing collectors ...")
@@ -268,7 +308,7 @@ def main():
 
     # 训练 ---------------------------------------------------------------
     print("\n" + "=" * 60)
-    print("  Start training (Diffusion + DiffFNO)")
+    print("  Start training (Diffusion + DiffFNO + Guidance)")
     print("=" * 60)
 
     result = offpolicy_trainer(
@@ -285,7 +325,7 @@ def main():
         logger=logger,
         save_best_fn=lambda policy: torch.save(
             policy.state_dict(),
-            os.path.join(log_path, "policy_best_fno.pth"),
+            os.path.join(log_path, "policy_best_fno_guided.pth"),
         ),
         save_checkpoint_fn=lambda epoch, env_step, gradient_step: torch.save(
             {
@@ -302,7 +342,7 @@ def main():
 
     print("\nTraining finished")
     pprint.pprint(result)
-    torch.save(policy.state_dict(), os.path.join(log_path, "policy_final_fno.pth"))
+    torch.save(policy.state_dict(), os.path.join(log_path, "policy_final_fno_guided.pth"))
     print(f"Saved final model to: {log_path}")
 
 
