@@ -13,6 +13,7 @@ from tianshou.data import Collector, VectorReplayBuffer, PrioritizedVectorReplay
 from torch.utils.tensorboard import SummaryWriter
 from tianshou.utils import TensorboardLogger
 from dropt_utils.tianshou_compat import offpolicy_trainer
+from dropt_utils.paper_logging import add_paper_logging_args, run_paper_logging
 import warnings
 
 # 导入建筑环境
@@ -190,6 +191,7 @@ def get_args():
                         help='记录梯度/优化指标到 TensorBoard 的间隔（梯度步）')
     parser.add_argument('--update-per-step', type=float, default=0.5,
                         help='每个环境步执行的参数更新次数 (默认0.5)')
+    add_paper_logging_args(parser)
     args = parser.parse_args()
 
     if args.full_episode:
@@ -442,6 +444,34 @@ def main():
     print(f"  - 异常值会用 ⚠ 符号标记")
     print(f"  - 时间统计会自动估算剩余训练时间\n")
 
+    last_paper_epoch = {"value": None}
+
+    def save_checkpoint_fn(epoch, env_step, gradient_step):
+        if args.save_interval > 0 and epoch % args.save_interval == 0:
+            torch.save(
+                {
+                    'model': policy.state_dict(),
+                    'optim_actor': actor_optim.state_dict(),
+                    'optim_critic': critic_optim.state_dict(),
+                },
+                os.path.join(log_path, f'checkpoint_{epoch}.pth')
+            )
+        if args.paper_log and args.paper_log_interval > 0 and epoch % args.paper_log_interval == 0:
+            try:
+                print(f"\n[paper-log] Epoch {epoch}: collecting trajectories and plots ...")
+                run_paper_logging(
+                    env=env,
+                    policy=policy,
+                    actor=diffusion,
+                    guidance_fn=None,
+                    args=args,
+                    log_path=log_path,
+                )
+                last_paper_epoch["value"] = epoch
+            except Exception as exc:
+                print(f"[paper-log] Failed at epoch {epoch}: {exc}")
+        return None
+
     result = offpolicy_trainer(
         policy=policy,
         train_collector=train_collector,
@@ -458,14 +488,7 @@ def main():
             policy.state_dict(),
             os.path.join(log_path, 'policy_best.pth')
         ),
-        save_checkpoint_fn=lambda epoch, env_step, gradient_step: torch.save(
-            {
-                'model': policy.state_dict(),
-                'optim_actor': actor_optim.state_dict(),
-                'optim_critic': critic_optim.state_dict(),
-            },
-            os.path.join(log_path, f'checkpoint_{epoch}.pth')
-        ) if epoch % args.save_interval == 0 else None,
+        save_checkpoint_fn=save_checkpoint_fn,
         train_fn=train_fn,
     )
     
@@ -477,6 +500,24 @@ def main():
     
     # 保存最终模型
     torch.save(policy.state_dict(), os.path.join(log_path, 'policy_final.pth'))
+
+    if args.paper_log:
+        try:
+            if args.paper_log_interval > 0 and last_paper_epoch["value"] == args.epoch:
+                print("[paper-log] Skipped final logging (already captured at last epoch).")
+            else:
+                print("\n[paper-log] Collecting trajectories and plots ...")
+                run_paper_logging(
+                    env=env,
+                    policy=policy,
+                    actor=diffusion,
+                    guidance_fn=None,
+                    args=args,
+                    log_path=log_path,
+                )
+                print(f"[paper-log] Saved to: {os.path.join(log_path, 'paper_data')}")
+        except Exception as exc:
+            print(f"[paper-log] Failed: {exc}")
     print(f"\n✓ 模型已保存到: {log_path}")
 
 

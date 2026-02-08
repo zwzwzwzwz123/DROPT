@@ -25,6 +25,7 @@ from tianshou.utils.net.continuous import ActorProb, Critic
 
 from dropt_utils.logger_formatter import EnhancedTensorboardLogger
 from dropt_utils.tianshou_compat import offpolicy_trainer
+from dropt_utils.paper_logging import add_paper_logging_args, run_paper_logging
 from env.building_env_wrapper import make_building_env
 from env.building_config import (
     DEFAULT_ACTOR_LR,
@@ -296,6 +297,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-episodes", type=int, default=3, help="Episodes for final evaluation.")
     parser.add_argument("--resume-path", type=str, default=None, help="Path to resume model checkpoint.")
 
+    add_paper_logging_args(parser)
     args = parser.parse_args()
     if args.bc_weight_final is None:
         args.bc_weight_final = args.bc_weight
@@ -489,6 +491,30 @@ def main():
     train_collector = Collector(policy, train_envs, replay_buffer, exploration_noise=False)
     test_collector = Collector(policy, test_envs)
 
+    last_paper_epoch = {"value": None}
+
+    def save_checkpoint_fn(epoch, env_step, gradient_step):
+        if epoch % max(1, DEFAULT_SAVE_INTERVAL) == 0:
+            torch.save(
+                {"model": policy.state_dict()},
+                os.path.join(log_path, f"checkpoint_{epoch}.pth"),
+            )
+        if args.paper_log and args.paper_log_interval > 0 and epoch % args.paper_log_interval == 0:
+            try:
+                print(f"\n[paper-log] Epoch {epoch}: collecting trajectories and plots ...")
+                run_paper_logging(
+                    env=env,
+                    policy=policy,
+                    actor=None,
+                    guidance_fn=None,
+                    args=args,
+                    log_path=log_path,
+                )
+                last_paper_epoch["value"] = epoch
+            except Exception as exc:
+                print(f"[paper-log] Failed at epoch {epoch}: {exc}")
+        return None
+
     result = offpolicy_trainer(
         policy=policy,
         train_collector=train_collector,
@@ -502,12 +528,7 @@ def main():
         test_in_train=False,
         logger=logger,
         save_best_fn=lambda p: torch.save(p.state_dict(), os.path.join(log_path, "policy_best.pth")),
-        save_checkpoint_fn=lambda epoch, env_step, gradient_step: torch.save(
-            {"model": policy.state_dict()},
-            os.path.join(log_path, f"checkpoint_{epoch}.pth"),
-        )
-        if epoch % max(1, DEFAULT_SAVE_INTERVAL) == 0
-        else None,
+        save_checkpoint_fn=save_checkpoint_fn,
     )
 
     print("\nTraining finished.")
@@ -515,6 +536,24 @@ def main():
 
     final_path = os.path.join(log_path, "policy_final.pth")
     torch.save(policy.state_dict(), final_path)
+
+    if args.paper_log:
+        try:
+            if args.paper_log_interval > 0 and last_paper_epoch["value"] == args.epoch:
+                print("[paper-log] Skipped final logging (already captured at last epoch).")
+            else:
+                print("\n[paper-log] Collecting trajectories and plots ...")
+                run_paper_logging(
+                    env=env,
+                    policy=policy,
+                    actor=None,
+                    guidance_fn=None,
+                    args=args,
+                    log_path=log_path,
+                )
+                print(f"[paper-log] Saved to: {os.path.join(log_path, 'paper_data')}")
+        except Exception as exc:
+            print(f"[paper-log] Failed: {exc}")
     print(f"Saved final policy to {final_path}")
 
     policy.eval()

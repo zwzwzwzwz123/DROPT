@@ -23,6 +23,7 @@ from diffusion.model import DoubleCritic, MLP
 from diffusion.rectified_flow import RectifiedFlow
 from dropt_utils.logger_formatter import EnhancedTensorboardLogger
 from dropt_utils.tianshou_compat import offpolicy_trainer
+from dropt_utils.paper_logging import run_paper_logging
 from env.datacenter_env import make_datacenter_env
 from policy import DiffusionOPT
 
@@ -245,17 +246,33 @@ def main(args=None):
     print(f"  采样器: {args.rf_sampler}, flow_steps={args.n_timesteps}, time_scale={args.rf_time_scale}")
 
     # 训练 ---------------------------------------------------------------
+    last_paper_epoch = {"value": None}
+
     def _save_checkpoint(ep, env_step, grad_step):
-        if ep % args.step_per_epoch != 0:
-            return None
-        return torch.save(
-            {
-                "model": policy.state_dict(),
-                "optim_actor": actor_optim.state_dict(),
-                "optim_critic": critic_optim.state_dict(),
-            },
-            os.path.join(log_path, f"checkpoint_{ep}.pth"),
-        )
+        if ep % args.step_per_epoch == 0:
+            torch.save(
+                {
+                    "model": policy.state_dict(),
+                    "optim_actor": actor_optim.state_dict(),
+                    "optim_critic": critic_optim.state_dict(),
+                },
+                os.path.join(log_path, f"checkpoint_{ep}.pth"),
+            )
+        if args.paper_log and args.paper_log_interval > 0 and ep % args.paper_log_interval == 0:
+            try:
+                print(f"\n[paper-log] Epoch {ep}: collecting trajectories and plots ...")
+                run_paper_logging(
+                    env=env,
+                    policy=policy,
+                    actor=actor,
+                    guidance_fn=None,
+                    args=args,
+                    log_path=log_path,
+                )
+                last_paper_epoch["value"] = ep
+            except Exception as exc:
+                print(f"[paper-log] Failed at epoch {ep}: {exc}")
+        return None
 
     result = offpolicy_trainer(
         policy=policy,
@@ -276,6 +293,24 @@ def main(args=None):
     print("\n训练完成")
     pprint.pprint(result)
     torch.save(policy.state_dict(), os.path.join(log_path, "policy_final_rf.pth"))
+
+    if args.paper_log:
+        try:
+            if args.paper_log_interval > 0 and last_paper_epoch["value"] == args.epoch:
+                print("[paper-log] Skipped final logging (already captured at last epoch).")
+            else:
+                print("\n[paper-log] Collecting trajectories and plots ...")
+                run_paper_logging(
+                    env=env,
+                    policy=policy,
+                    actor=actor,
+                    guidance_fn=None,
+                    args=args,
+                    log_path=log_path,
+                )
+                print(f"[paper-log] Saved to: {os.path.join(log_path, 'paper_data')}")
+        except Exception as exc:
+            print(f"[paper-log] Failed: {exc}")
     print(f"模型已保存至: {log_path}")
 
 
