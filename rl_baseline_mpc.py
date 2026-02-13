@@ -9,6 +9,8 @@
 """
 
 import argparse
+import math
+import sys
 import os
 import pprint
 from datetime import datetime
@@ -223,6 +225,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
     parser.add_argument("--epoch", type=int, default=20000, help="Number of training epochs.")
     parser.add_argument("--step-per-epoch", type=int, default=DEFAULT_STEP_PER_EPOCH, help="Env steps per epoch.")
+    parser.add_argument('--total-steps', type=int, default=None,
+                        help='Total environment steps budget (overrides epoch if set)')
     parser.add_argument("--step-per-collect", type=int, default=DEFAULT_STEP_PER_COLLECT, help="Steps per data collection.")
     parser.add_argument("--episode-per-test", type=int, default=DEFAULT_EPISODE_PER_TEST, help="Episodes per evaluation.")
     parser.add_argument("--training-num", type=int, default=DEFAULT_TRAINING_NUM, help="Parallel training envs.")
@@ -299,6 +303,13 @@ def parse_args() -> argparse.Namespace:
 
     add_paper_logging_args(parser)
     args = parser.parse_args()
+    argv = sys.argv[1:]
+    has_epoch_flag = any(arg in ('--epoch', '-e') for arg in argv)
+    has_total_steps_flag = '--total-steps' in argv
+    if not has_epoch_flag and not has_total_steps_flag:
+        args.total_steps = 1_000_000
+    if args.total_steps is not None and args.total_steps > 0:
+        args.epoch = max(1, math.ceil(args.total_steps / args.step_per_epoch))
     if args.bc_weight_final is None:
         args.bc_weight_final = args.bc_weight
     return args

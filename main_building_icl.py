@@ -9,6 +9,8 @@
 """
 
 import argparse
+import math
+import sys
 import os
 import pprint
 from datetime import datetime
@@ -618,6 +620,8 @@ def get_args():
     parser.add_argument("--gamma", type=float, default=DEFAULT_GAMMA)
     parser.add_argument("--n-step", type=int, default=DEFAULT_N_STEP)
     parser.add_argument("--step-per-epoch", type=int, default=DEFAULT_STEP_PER_EPOCH)
+    parser.add_argument('--total-steps', type=int, default=None,
+                        help='Total environment steps budget (overrides epoch if set)')
     parser.add_argument("--step-per-collect", type=int, default=DEFAULT_STEP_PER_COLLECT)
     parser.add_argument("--episode-per-test", type=int, default=DEFAULT_EPISODE_PER_TEST)
     parser.add_argument("--prioritized-replay", action="store_true", default=False)
@@ -650,6 +654,13 @@ def get_args():
                         help=f"Linear decay steps for BC weight (default {ICL_DEFAULT_BC_DECAY_STEPS})")
     add_paper_logging_args(parser)
     args = parser.parse_args()
+    argv = sys.argv[1:]
+    has_epoch_flag = any(arg in ('--epoch', '-e') for arg in argv)
+    has_total_steps_flag = '--total-steps' in argv
+    if not has_epoch_flag and not has_total_steps_flag:
+        args.total_steps = 1_000_000
+    if args.total_steps is not None and args.total_steps > 0:
+        args.epoch = max(1, math.ceil(args.total_steps / args.step_per_epoch))
 
     if args.reward_normalization and args.n_step > 1:
         # n_step 与奖励归一化不兼容，这里保持行为与原脚本一致

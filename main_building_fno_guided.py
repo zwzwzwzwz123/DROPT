@@ -12,6 +12,7 @@ import pickle
 import pprint
 import sys
 import warnings
+import math
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Callable, Optional, Dict, Any, List, Tuple
@@ -131,6 +132,13 @@ def get_args():
     args.step_per_epoch = 4096
     args.step_per_collect = 1024
     args.log_update_interval = 200
+    argv = sys.argv[1:]
+    has_epoch_flag = any(arg in ('--epoch', '-e') for arg in argv)
+    has_total_steps_flag = '--total-steps' in argv
+    if not has_epoch_flag and not has_total_steps_flag:
+        args.total_steps = 1_000_000
+    if args.total_steps is not None and args.total_steps > 0:
+        args.epoch = max(1, math.ceil(args.total_steps / args.step_per_epoch))
     return args
 
 

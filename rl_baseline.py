@@ -10,6 +10,8 @@ RL 基线（SAC）入口文件。
 """
 
 import argparse
+import math
+import sys
 import os
 import pprint
 import inspect
@@ -99,6 +101,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42, help="随机种子")
     parser.add_argument("--epoch", type=int, default=20000, help="训练轮数（对齐扩散策略）")
     parser.add_argument("--step-per-epoch", type=int, default=16384, help="每轮环境步数（对齐扩散策略）")
+    parser.add_argument('--total-steps', type=int, default=None,
+                        help='Total environment steps budget (overrides epoch if set)')
     parser.add_argument("--step-per-collect", type=int, default=4096, help="每次收集步数（对齐扩散策略）")
     parser.add_argument("--episode-per-test", type=int, default=DEFAULT_EPISODE_PER_TEST, help="评测回合数")
     parser.add_argument("--training-num", type=int, default=DEFAULT_TRAINING_NUM, help="并行训练环境数")
@@ -140,7 +144,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resume-path", type=str, default=None, help="恢复训练的模型路径")
 
     add_paper_logging_args(parser)
-    return parser.parse_args()
+    args = parser.parse_args()
+    argv = sys.argv[1:]
+    has_epoch_flag = any(arg in ('--epoch', '-e') for arg in argv)
+    has_total_steps_flag = '--total-steps' in argv
+    if not has_epoch_flag and not has_total_steps_flag:
+        args.total_steps = 1_000_000
+    if args.total_steps is not None and args.total_steps > 0:
+        args.epoch = max(1, math.ceil(args.total_steps / args.step_per_epoch))
+    return args
 
 
 def _aggregate_metrics(vector_env) -> Optional[Dict[str, float]]:

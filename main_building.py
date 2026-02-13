@@ -4,8 +4,10 @@
 # 基于 DROPT 框架，应用扩散模型+强化学习到建筑HVAC控制
 
 import argparse
+import math
 import os
 import pprint
+import sys
 import torch
 import numpy as np
 from datetime import datetime
@@ -127,6 +129,8 @@ def get_args():
                         help='每个epoch采集的环境步数 (默认16384)')
     parser.add_argument('--step-per-collect', type=int, default=4096,
                         help='每次采集的步数 (默认4096，提升样本质量)')
+    parser.add_argument('--total-steps', type=int, default=None,
+                        help='Total environment steps budget (overrides epoch if set)')
     parser.add_argument('-b', '--batch-size', type=int, default=256,
                         help='批次大小 (默认256)')
     parser.add_argument('--wd', type=float, default=1e-4,
@@ -196,6 +200,14 @@ def get_args():
 
     if args.full_episode:
         args.episode_length = None
+    argv = sys.argv[1:]
+    has_epoch_flag = any(arg in ('--epoch', '-e') for arg in argv)
+    has_total_steps_flag = '--total-steps' in argv
+    if not has_epoch_flag and not has_total_steps_flag:
+        args.total_steps = 1_000_000
+    if args.total_steps is not None and args.total_steps > 0:
+        args.epoch = max(1, math.ceil(args.total_steps / args.step_per_epoch))
+
 
     if args.reward_normalization and args.n_step > 1:
         print("⚠️  提示: n_step>1 与奖励归一化不兼容，已自动关闭 reward_normalization")

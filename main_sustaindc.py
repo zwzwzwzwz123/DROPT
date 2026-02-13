@@ -4,6 +4,8 @@
 # 复用 BEAR + 数据中心脚本，并切换为 SustainDCEnvWrapper。
 
 import argparse
+import math
+import sys
 import os
 import pprint
 import sys
@@ -85,6 +87,8 @@ def get_args():
     parser.add_argument("--n-step", type=int, default=DEFAULT_N_STEP, help="N-step TD 长度。")
     parser.add_argument("--epoch", type=int, default=20000, help="总训练轮次。")
     parser.add_argument("--step-per-epoch", type=int, default=DEFAULT_STEP_PER_EPOCH, help="每个 epoch 采集的环境步数。")
+    parser.add_argument('--total-steps', type=int, default=None,
+                        help='Total environment steps budget (overrides epoch if set)')
     parser.add_argument("--step-per-collect", type=int, default=DEFAULT_STEP_PER_COLLECT, help="每次 collect 调用采集的步数。")
     parser.add_argument("--episode-per-test", type=int, default=DEFAULT_EPISODE_PER_TEST, help="测试阶段评估的回合数量。")
     parser.add_argument("--update-per-step", type=float, default=0.5, help="每个环境步的梯度更新次数。")
@@ -121,6 +125,13 @@ def get_args():
 
     add_paper_logging_args(parser)
     args = parser.parse_args()
+    argv = sys.argv[1:]
+    has_epoch_flag = any(arg in ('--epoch', '-e') for arg in argv)
+    has_total_steps_flag = '--total-steps' in argv
+    if not has_epoch_flag and not has_total_steps_flag:
+        args.total_steps = 1_000_000
+    if args.total_steps is not None and args.total_steps > 0:
+        args.epoch = max(1, math.ceil(args.total_steps / args.step_per_epoch))
     if args.bc_weight_final is None:
         args.bc_weight_final = args.bc_weight
     if args.reward_normalization and args.n_step > 1:
