@@ -4,8 +4,10 @@
 # 基于 DROPT 框架，应用扩散模型+强化学习到建筑HVAC控制
 
 import argparse
+import math
 import os
 import pprint
+import sys
 import torch
 import numpy as np
 from datetime import datetime
@@ -13,6 +15,7 @@ from tianshou.data import Collector, VectorReplayBuffer, PrioritizedVectorReplay
 from torch.utils.tensorboard import SummaryWriter
 from tianshou.utils import TensorboardLogger
 from dropt_utils.tianshou_compat import offpolicy_trainer
+from dropt_utils.paper_logging import add_paper_logging_args, run_paper_logging
 import warnings
 
 # 导入建筑环境
@@ -126,6 +129,8 @@ def get_args():
                         help='每个epoch采集的环境步数 (默认16384)')
     parser.add_argument('--step-per-collect', type=int, default=4096,
                         help='每次采集的步数 (默认4096，提升样本质量)')
+    parser.add_argument('--total-steps', type=int, default=None,
+                        help='Total environment steps budget (overrides epoch if set)')
     parser.add_argument('-b', '--batch-size', type=int, default=256,
                         help='批次大小 (默认256)')
     parser.add_argument('--wd', type=float, default=1e-4,
@@ -190,10 +195,19 @@ def get_args():
                         help='记录梯度/优化指标到 TensorBoard 的间隔（梯度步）')
     parser.add_argument('--update-per-step', type=float, default=0.5,
                         help='每个环境步执行的参数更新次数 (默认0.5)')
+    add_paper_logging_args(parser)
     args = parser.parse_args()
 
     if args.full_episode:
         args.episode_length = None
+    argv = sys.argv[1:]
+    has_epoch_flag = any(arg in ('--epoch', '-e') for arg in argv)
+    has_total_steps_flag = '--total-steps' in argv
+    if not has_epoch_flag and not has_total_steps_flag:
+        args.total_steps = 1_000_000
+    if args.total_steps is not None and args.total_steps > 0:
+        args.epoch = max(1, math.ceil(args.total_steps / args.step_per_epoch))
+
 
     if args.reward_normalization and args.n_step > 1:
         print("⚠️  提示: n_step>1 与奖励归一化不兼容，已自动关闭 reward_normalization")
@@ -442,6 +456,34 @@ def main():
     print(f"  - 异常值会用 ⚠ 符号标记")
     print(f"  - 时间统计会自动估算剩余训练时间\n")
 
+    last_paper_epoch = {"value": None}
+
+    def save_checkpoint_fn(epoch, env_step, gradient_step):
+        if args.save_interval > 0 and epoch % args.save_interval == 0:
+            torch.save(
+                {
+                    'model': policy.state_dict(),
+                    'optim_actor': actor_optim.state_dict(),
+                    'optim_critic': critic_optim.state_dict(),
+                },
+                os.path.join(log_path, f'checkpoint_{epoch}.pth')
+            )
+        if args.paper_log and args.paper_log_interval > 0 and epoch % args.paper_log_interval == 0:
+            try:
+                print(f"\n[paper-log] Epoch {epoch}: collecting trajectories and plots ...")
+                run_paper_logging(
+                    env=env,
+                    policy=policy,
+                    actor=diffusion,
+                    guidance_fn=None,
+                    args=args,
+                    log_path=log_path,
+                )
+                last_paper_epoch["value"] = epoch
+            except Exception as exc:
+                print(f"[paper-log] Failed at epoch {epoch}: {exc}")
+        return None
+
     result = offpolicy_trainer(
         policy=policy,
         train_collector=train_collector,
@@ -458,14 +500,7 @@ def main():
             policy.state_dict(),
             os.path.join(log_path, 'policy_best.pth')
         ),
-        save_checkpoint_fn=lambda epoch, env_step, gradient_step: torch.save(
-            {
-                'model': policy.state_dict(),
-                'optim_actor': actor_optim.state_dict(),
-                'optim_critic': critic_optim.state_dict(),
-            },
-            os.path.join(log_path, f'checkpoint_{epoch}.pth')
-        ) if epoch % args.save_interval == 0 else None,
+        save_checkpoint_fn=save_checkpoint_fn,
         train_fn=train_fn,
     )
     
@@ -477,6 +512,24 @@ def main():
     
     # 保存最终模型
     torch.save(policy.state_dict(), os.path.join(log_path, 'policy_final.pth'))
+
+    if args.paper_log:
+        try:
+            if args.paper_log_interval > 0 and last_paper_epoch["value"] == args.epoch:
+                print("[paper-log] Skipped final logging (already captured at last epoch).")
+            else:
+                print("\n[paper-log] Collecting trajectories and plots ...")
+                run_paper_logging(
+                    env=env,
+                    policy=policy,
+                    actor=diffusion,
+                    guidance_fn=None,
+                    args=args,
+                    log_path=log_path,
+                )
+                print(f"[paper-log] Saved to: {os.path.join(log_path, 'paper_data')}")
+        except Exception as exc:
+            print(f"[paper-log] Failed: {exc}")
     print(f"\n✓ 模型已保存到: {log_path}")
 
 

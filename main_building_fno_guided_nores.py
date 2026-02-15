@@ -19,6 +19,7 @@ from typing import Callable, Optional, Dict, Any, List, Tuple
 
 import numpy as np
 import torch
+import torch.nn as nn
 from tianshou.data import Collector, PrioritizedVectorReplayBuffer, VectorReplayBuffer
 from torch.utils.tensorboard import SummaryWriter
 
@@ -30,9 +31,86 @@ from env.building_env_wrapper import make_building_env
 from policy import DiffusionOPT
 from diffusion import Diffusion
 from diffusion.model import DoubleCritic
-from diffusion.model_fno import DiffFNO
+from diffusion.helpers import SinusoidalPosEmb
+from diffusion.model_fno import SpectralConv1d
 
 warnings.filterwarnings("ignore")
+
+
+class DiffFNO_NoResidual(nn.Module):
+    """
+    无残差版本的 DiffFNO：移除 residual 线性旁路与 gate。
+    其余结构与 diffusion.model_fno.DiffFNO 一致，保持对比公平。
+    """
+
+    def __init__(
+        self,
+        state_dim: int,
+        action_dim: int,
+        width: int = 64,
+        modes: int = 8,
+        n_layers: int = 2,
+        t_dim: int = 16,
+        activation: str = "mish",
+    ):
+        super().__init__()
+        _act = nn.Mish if activation == "mish" else nn.ReLU
+
+        # 状态 + 时间编码
+        self.state_mlp = nn.Sequential(
+            nn.Linear(state_dim, width),
+            _act(),
+            nn.Linear(width, width),
+        )
+        self.time_mlp = nn.Sequential(
+            SinusoidalPosEmb(t_dim),
+            nn.Linear(t_dim, t_dim * 2),
+            _act(),
+            nn.Linear(t_dim * 2, t_dim),
+        )
+        self.cond_proj = nn.Linear(width + t_dim, width)
+
+        # 输入: [B, 1, L] -> [B, width, L]
+        self.input_proj = nn.Conv1d(1, width, kernel_size=1)
+
+        # 频域层
+        self.spectral_layers = nn.ModuleList(
+            [SpectralConv1d(width, width, modes=modes) for _ in range(n_layers)]
+        )
+        self.pointwise = nn.ModuleList(
+            [nn.Conv1d(width, width, kernel_size=1) for _ in range(n_layers)]
+        )
+        self.activation = _act()
+
+        # 输出映射回动作维度
+        self.out_proj = nn.Sequential(
+            nn.Conv1d(width, width, kernel_size=1),
+            _act(),
+            nn.Conv1d(width, 1, kernel_size=1),
+        )
+
+    def forward(self, x: torch.Tensor, time: torch.Tensor, state: torch.Tensor) -> torch.Tensor:
+        device = x.device
+        if time.device != device:
+            time = time.to(device)
+        if state.device != device:
+            state = state.to(device)
+
+        state_feat = self.state_mlp(state)  # [B, width]
+        t_feat = self.time_mlp(time)        # [B, t_dim]
+        cond = self.cond_proj(torch.cat([state_feat, t_feat], dim=-1)).unsqueeze(-1)  # [B, width, 1]
+
+        # [B, width, L]
+        y = self.input_proj(x.unsqueeze(1))
+        y = y + cond
+
+        for spec_conv, pw_conv in zip(self.spectral_layers, self.pointwise):
+            freq_out = spec_conv(y)
+            point_out = pw_conv(y)
+            y = self.activation(freq_out + point_out + cond)
+
+        out = self.out_proj(y).squeeze(1)  # [B, L]
+        return out
 
 
 def _parse_fno_args():
@@ -104,8 +182,8 @@ def get_args():
     sys.argv = saved_argv
 
     if args.log_prefix == "default":
-        args.log_prefix = "diffusion_fno_guided"
-    args.algorithm = "diffusion_fno_guided"
+        args.log_prefix = "diffusion_fno_guided_nores"
+    args.algorithm = "diffusion_fno_guided_nores"
 
     # 默认开启专家模式 + BC（与 rectified_flow 脚本一致）
     if args.expert_type is None:
@@ -625,7 +703,7 @@ def main():
     )
 
     print("\n" + "=" * 60)
-    print("  BEAR Building + DiffFNO + Guidance")
+    print("  BEAR Building + DiffFNO(NoRes) + Guidance")
     print("=" * 60)
     pprint.pprint(vars(args))
     print()
@@ -686,12 +764,12 @@ def main():
     logger.training_logger.metrics_getter = metrics_getter
 
     # 网络 ---------------------------------------------------------------
-    print("\nBuilding DiffFNO backbone ...")
+    print("\nBuilding DiffFNO(NoRes) backbone ...")
     state_dim = env.state_dim
     action_dim = env.action_dim
     max_action = 1.0
 
-    fno_backbone = DiffFNO(
+    fno_backbone = DiffFNO_NoResidual(
         state_dim=state_dim,
         action_dim=action_dim,
         width=args.fno_width,
@@ -737,7 +815,7 @@ def main():
     else:
         print("Guidance disabled (scale <= 0)")
 
-    print(f"  DiffFNO params: {sum(p.numel() for p in fno_backbone.parameters()):,}")
+    print(f"  DiffFNO(NoRes) params: {sum(p.numel() for p in fno_backbone.parameters()):,}")
     print(f"  Critic params: {sum(p.numel() for p in critic.parameters()):,}")
 
     # 策略 ---------------------------------------------------------------
@@ -800,7 +878,7 @@ def main():
 
     # 训练 ---------------------------------------------------------------
     print("\n" + "=" * 60)
-    print("  Start training (Diffusion + DiffFNO + Guidance)")
+    print("  Start training (Diffusion + DiffFNO(NoRes) + Guidance)")
     print("=" * 60)
 
     last_paper_epoch = {"value": None}

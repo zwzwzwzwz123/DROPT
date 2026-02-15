@@ -9,6 +9,8 @@
 """
 
 import argparse
+import math
+import sys
 import os
 import pprint
 from datetime import datetime
@@ -25,6 +27,7 @@ from tianshou.utils import TensorboardLogger
 from env.building_env_wrapper import make_building_env, BearEnvWrapper
 from dropt_utils.logger_formatter import EnhancedTensorboardLogger
 from dropt_utils.tianshou_compat import offpolicy_trainer
+from dropt_utils.paper_logging import add_paper_logging_args, run_paper_logging
 from env.building_config import (
     DEFAULT_REWARD_SCALE,
     DEFAULT_ENERGY_WEIGHT,
@@ -617,6 +620,8 @@ def get_args():
     parser.add_argument("--gamma", type=float, default=DEFAULT_GAMMA)
     parser.add_argument("--n-step", type=int, default=DEFAULT_N_STEP)
     parser.add_argument("--step-per-epoch", type=int, default=DEFAULT_STEP_PER_EPOCH)
+    parser.add_argument('--total-steps', type=int, default=None,
+                        help='Total environment steps budget (overrides epoch if set)')
     parser.add_argument("--step-per-collect", type=int, default=DEFAULT_STEP_PER_COLLECT)
     parser.add_argument("--episode-per-test", type=int, default=DEFAULT_EPISODE_PER_TEST)
     parser.add_argument("--prioritized-replay", action="store_true", default=False)
@@ -647,7 +652,15 @@ def get_args():
     parser.add_argument("--bc-weight-final", type=float, default=0.1)
     parser.add_argument("--bc-weight-decay-steps", type=int, default=ICL_DEFAULT_BC_DECAY_STEPS,
                         help=f"Linear decay steps for BC weight (default {ICL_DEFAULT_BC_DECAY_STEPS})")
+    add_paper_logging_args(parser)
     args = parser.parse_args()
+    argv = sys.argv[1:]
+    has_epoch_flag = any(arg in ('--epoch', '-e') for arg in argv)
+    has_total_steps_flag = '--total-steps' in argv
+    if not has_epoch_flag and not has_total_steps_flag:
+        args.total_steps = 1_000_000
+    if args.total_steps is not None and args.total_steps > 0:
+        args.epoch = max(1, math.ceil(args.total_steps / args.step_per_epoch))
 
     if args.reward_normalization and args.n_step > 1:
         # n_step 与奖励归一化不兼容，这里保持行为与原脚本一致
@@ -937,6 +950,27 @@ def main():
             latest_ckpt_path,
         )
 
+    last_paper_epoch = {"value": None}
+
+    def save_checkpoint_fn(epoch, env_step, gradient_step):
+        if args.save_interval > 0 and epoch % args.save_interval == 0:
+            _save_checkpoint()
+        if args.paper_log and args.paper_log_interval > 0 and epoch % args.paper_log_interval == 0:
+            try:
+                print(f"\n[paper-log] Epoch {epoch}: collecting trajectories and plots ...")
+                run_paper_logging(
+                    env=env,
+                    policy=policy,
+                    actor=actor,
+                    guidance_fn=None,
+                    args=args,
+                    log_path=log_path,
+                )
+                last_paper_epoch["value"] = epoch
+            except Exception as exc:
+                print(f"[paper-log] Failed at epoch {epoch}: {exc}")
+        return None
+
     result = offpolicy_trainer(
         policy=policy,
         train_collector=train_collector,
@@ -950,9 +984,7 @@ def main():
         test_in_train=False,
         logger=logger,
         save_best_fn=lambda pol: torch.save(pol.state_dict(), os.path.join(log_path, "policy_best.pth")),
-        save_checkpoint_fn=lambda epoch, env_step, gradient_step: _save_checkpoint()
-        if epoch % args.save_interval == 0
-        else None,
+        save_checkpoint_fn=save_checkpoint_fn,
     )
 
     print("\n" + "=" * 60)
@@ -960,6 +992,24 @@ def main():
     print("=" * 60)
     pprint.pprint(result)
     torch.save(policy.state_dict(), os.path.join(log_path, "policy_final.pth"))
+
+    if args.paper_log:
+        try:
+            if args.paper_log_interval > 0 and last_paper_epoch["value"] == args.epoch:
+                print("[paper-log] Skipped final logging (already captured at last epoch).")
+            else:
+                print("\n[paper-log] Collecting trajectories and plots ...")
+                run_paper_logging(
+                    env=env,
+                    policy=policy,
+                    actor=actor,
+                    guidance_fn=None,
+                    args=args,
+                    log_path=log_path,
+                )
+                print(f"[paper-log] Saved to: {os.path.join(log_path, 'paper_data')}")
+        except Exception as exc:
+            print(f"[paper-log] Failed: {exc}")
     print(f"\n[提示] 模型已保存到: {log_path}")
 
 

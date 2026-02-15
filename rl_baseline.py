@@ -10,6 +10,8 @@ RL 基线（SAC）入口文件。
 """
 
 import argparse
+import math
+import sys
 import os
 import pprint
 import inspect
@@ -26,6 +28,7 @@ from tianshou.utils.net.continuous import ActorProb, Critic
 
 from dropt_utils.logger_formatter import EnhancedTensorboardLogger
 from dropt_utils.tianshou_compat import offpolicy_trainer
+from dropt_utils.paper_logging import add_paper_logging_args, run_paper_logging
 from env.building_env_wrapper import make_building_env
 from env.building_config import (
     DEFAULT_ACTOR_LR,
@@ -98,6 +101,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42, help="随机种子")
     parser.add_argument("--epoch", type=int, default=20000, help="训练轮数（对齐扩散策略）")
     parser.add_argument("--step-per-epoch", type=int, default=16384, help="每轮环境步数（对齐扩散策略）")
+    parser.add_argument('--total-steps', type=int, default=None,
+                        help='Total environment steps budget (overrides epoch if set)')
     parser.add_argument("--step-per-collect", type=int, default=4096, help="每次收集步数（对齐扩散策略）")
     parser.add_argument("--episode-per-test", type=int, default=DEFAULT_EPISODE_PER_TEST, help="评测回合数")
     parser.add_argument("--training-num", type=int, default=DEFAULT_TRAINING_NUM, help="并行训练环境数")
@@ -138,7 +143,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-episodes", type=int, default=3, help="训练结束评测回合数")
     parser.add_argument("--resume-path", type=str, default=None, help="恢复训练的模型路径")
 
-    return parser.parse_args()
+    add_paper_logging_args(parser)
+    args = parser.parse_args()
+    argv = sys.argv[1:]
+    has_epoch_flag = any(arg in ('--epoch', '-e') for arg in argv)
+    has_total_steps_flag = '--total-steps' in argv
+    if not has_epoch_flag and not has_total_steps_flag:
+        args.total_steps = 1_000_000
+    if args.total_steps is not None and args.total_steps > 0:
+        args.epoch = max(1, math.ceil(args.total_steps / args.step_per_epoch))
+    return args
 
 
 def _aggregate_metrics(vector_env) -> Optional[Dict[str, float]]:
@@ -345,6 +359,30 @@ def main():
     test_collector = Collector(policy, test_envs)
 
     # 训练
+    last_paper_epoch = {"value": None}
+
+    def save_checkpoint_fn(epoch, env_step, gradient_step):
+        if epoch % max(1, DEFAULT_SAVE_INTERVAL) == 0:
+            torch.save(
+                {"model": policy.state_dict()},
+                os.path.join(log_path, f"checkpoint_{epoch}.pth"),
+            )
+        if args.paper_log and args.paper_log_interval > 0 and epoch % args.paper_log_interval == 0:
+            try:
+                print(f"\n[paper-log] Epoch {epoch}: collecting trajectories and plots ...")
+                run_paper_logging(
+                    env=env,
+                    policy=policy,
+                    actor=None,
+                    guidance_fn=None,
+                    args=args,
+                    log_path=log_path,
+                )
+                last_paper_epoch["value"] = epoch
+            except Exception as exc:
+                print(f"[paper-log] Failed at epoch {epoch}: {exc}")
+        return None
+
     result = offpolicy_trainer(
         policy=policy,
         train_collector=train_collector,
@@ -358,12 +396,7 @@ def main():
         test_in_train=False,
         logger=logger,
         save_best_fn=lambda p: torch.save(p.state_dict(), os.path.join(log_path, "policy_best.pth")),
-        save_checkpoint_fn=lambda epoch, env_step, gradient_step: torch.save(
-            {"model": policy.state_dict()},
-            os.path.join(log_path, f"checkpoint_{epoch}.pth"),
-        )
-        if epoch % max(1, DEFAULT_SAVE_INTERVAL) == 0
-        else None,
+        save_checkpoint_fn=save_checkpoint_fn,
     )
 
     print("\n训练完成。")
@@ -372,6 +405,24 @@ def main():
     # 保存最终模型
     final_path = os.path.join(log_path, "policy_final.pth")
     torch.save(policy.state_dict(), final_path)
+
+    if args.paper_log:
+        try:
+            if args.paper_log_interval > 0 and last_paper_epoch["value"] == args.epoch:
+                print("[paper-log] Skipped final logging (already captured at last epoch).")
+            else:
+                print("\n[paper-log] Collecting trajectories and plots ...")
+                run_paper_logging(
+                    env=env,
+                    policy=policy,
+                    actor=None,
+                    guidance_fn=None,
+                    args=args,
+                    log_path=log_path,
+                )
+                print(f"[paper-log] Saved to: {os.path.join(log_path, 'paper_data')}")
+        except Exception as exc:
+            print(f"[paper-log] Failed: {exc}")
     print(f"已保存最终模型: {final_path}")
 
     # 评测
