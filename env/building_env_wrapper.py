@@ -19,6 +19,10 @@ if not os.path.isdir(bear_path):
 if os.path.isdir(bear_path) and bear_path not in sys.path:
     sys.path.insert(0, bear_path)
 
+data_root = os.path.join(bear_path, 'BEAR', 'Data')
+if not os.path.isdir(data_root):
+    data_root = os.path.join(bear_path, 'bear', 'Data')
+
 # 导入 BEAR 模块
 from BEAR.Env.env_building import BuildingEnvReal
 from BEAR.Utils.utils_building import ParameterGenerator
@@ -130,7 +134,7 @@ class BearEnvWrapper(gym.Env):
                 time_reso=time_resolution,
                 temp_range=(-40, 40),
                 spacetype='continuous',
-                root='bear/BEAR/Data/',
+                root=data_root,
                 **kwargs
             )
         except Exception as e:
