@@ -16,8 +16,11 @@ from typing import Optional, Tuple
 from abc import ABC, abstractmethod
 
 # 添加 BEAR 路径
-bear_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'bear')
-if bear_path not in sys.path:
+project_root = os.path.dirname(os.path.dirname(__file__))
+bear_path = os.path.join(project_root, 'BEAR')
+if not os.path.isdir(bear_path):
+    bear_path = os.path.join(project_root, 'bear')
+if os.path.isdir(bear_path) and bear_path not in sys.path:
     sys.path.insert(0, bear_path)
 
 from BEAR.Controller.MPC_Controller import MPCAgent
