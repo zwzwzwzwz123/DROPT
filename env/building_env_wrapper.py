@@ -22,6 +22,8 @@ if os.path.isdir(bear_path) and bear_path not in sys.path:
 data_root = os.path.join(bear_path, 'BEAR', 'Data')
 if not os.path.isdir(data_root):
     data_root = os.path.join(bear_path, 'bear', 'Data')
+if not data_root.endswith(os.sep):
+    data_root = data_root + os.sep
 
 # 导入 BEAR 模块
 from BEAR.Env.env_building import BuildingEnvReal
