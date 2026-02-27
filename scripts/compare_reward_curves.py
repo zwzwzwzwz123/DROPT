@@ -94,8 +94,14 @@ def plot_curves(runs, tag: str, smooth_window: int, out_path: str) -> None:
     if smooth_window and smooth_window > 1:
         title += f" (smooth={smooth_window})"
     plt.title(title)
-    plt.legend(fontsize=8, loc="best")
-    plt.tight_layout()
+    plt.legend(
+        fontsize=8,
+        ncol=2,
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.12),
+        frameon=True,
+    )
+    plt.subplots_adjust(bottom=0.22)
     plt.savefig(out_path, dpi=300)
     plt.close()
     print(f"saved: {out_path}")
