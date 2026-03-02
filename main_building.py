@@ -4,21 +4,24 @@
 # 基于 DROPT 框架，应用扩散模型+强化学习到建筑HVAC控制
 
 import argparse
+import math
 import os
 import pprint
+import sys
 import torch
 import numpy as np
 from datetime import datetime
 from tianshou.data import Collector, VectorReplayBuffer, PrioritizedVectorReplayBuffer
 from torch.utils.tensorboard import SummaryWriter
 from tianshou.utils import TensorboardLogger
-from tianshou.trainer import offpolicy_trainer
+from dropt_utils.tianshou_compat import offpolicy_trainer
+from dropt_utils.paper_logging import add_paper_logging_args, run_paper_logging
 import warnings
 
 # 导入建筑环境
 from env.building_env_wrapper import make_building_env
 # 导入日志格式化工具
-from utils.logger_formatter import EnhancedTensorboardLogger
+from dropt_utils.logger_formatter import EnhancedTensorboardLogger
 # 导入配置常量（修复：统一管理配置参数，避免硬编码）
 from env.building_config import (
     DEFAULT_REWARD_SCALE,
@@ -47,6 +50,7 @@ from env.building_config import (
     DEFAULT_EXPLORATION_NOISE,
     DEFAULT_LOG_DIR,
     DEFAULT_SAVE_INTERVAL,
+    DEFAULT_MPC_PLANNING_STEPS,
 )
 
 # 导入 DROPT 核心组件
@@ -86,8 +90,12 @@ def get_args():
                         help=f'能耗权重 α (默认{DEFAULT_ENERGY_WEIGHT})')
     parser.add_argument('--temp-weight', type=float, default=DEFAULT_TEMP_WEIGHT,
                         help=f'温度偏差权重 β (默认{DEFAULT_TEMP_WEIGHT})')
-    parser.add_argument('--add-violation-penalty', action='store_true', default=False,
-                        help='是否添加温度越界惩罚')
+    parser.add_argument('--add-violation-penalty', dest='add_violation_penalty',
+                        action='store_true', default=True,
+                        help='启用温度越界惩罚（默认开启）')
+    parser.add_argument('--no-add-violation-penalty', dest='add_violation_penalty',
+                        action='store_false',
+                        help='关闭温度越界惩罚')
     parser.add_argument('--violation-penalty', type=float, default=DEFAULT_VIOLATION_PENALTY,
                         help=f'温度越界惩罚系数 γ (默认{DEFAULT_VIOLATION_PENALTY})')
 
@@ -95,18 +103,20 @@ def get_args():
     parser.add_argument('--expert-type', type=str, default=None,
                         choices=['mpc', 'pid', 'rule', 'bangbang', None],
                         help='专家控制器类型（用于行为克隆）')
+    parser.add_argument('--mpc-planning-steps', type=int, default=DEFAULT_MPC_PLANNING_STEPS,
+                        help=f'MPC 专家规划步数 (默认{DEFAULT_MPC_PLANNING_STEPS})')
     parser.add_argument('--bc-coef', action='store_true', default=False,
                         help='是否使用行为克隆（BC）损失')
     parser.add_argument('--bc-weight', type=float, default=0.8,
                         help='行为克隆损失初始权重（默认0.8）')
     parser.add_argument('--bc-weight-final', type=float, default=0.1,
                         help='BC权重最终值（默认0.1，逐渐过渡到策略梯度）')
-    parser.add_argument('--bc-weight-decay-steps', type=int, default=50000,
-                        help='BC权重线性衰减步数（默认5万步）')
+    parser.add_argument('--bc-weight-decay-steps', type=int, default=150000,
+                        help='BC权重线性衰减步数（默认15万步，延长专家引导）')
     
     # ========== 基础训练参数（使用配置常量作为默认值） ==========
-    parser.add_argument('--exploration-noise', type=float, default=0.15,
-                        help='探索噪声标准差 (默认0.15，增强早期探索)')
+    parser.add_argument('--exploration-noise', type=float, default=DEFAULT_EXPLORATION_NOISE,
+                        help=f'探索噪声标准差 (默认{DEFAULT_EXPLORATION_NOISE}，降低随机扰动)')
     parser.add_argument('--algorithm', type=str, default='diffusion_opt',
                         help='算法名称')
     parser.add_argument('--seed', type=int, default=42,
@@ -119,6 +129,8 @@ def get_args():
                         help='每个epoch采集的环境步数 (默认16384)')
     parser.add_argument('--step-per-collect', type=int, default=4096,
                         help='每次采集的步数 (默认4096，提升样本质量)')
+    parser.add_argument('--total-steps', type=int, default=None,
+                        help='Total environment steps budget (overrides epoch if set)')
     parser.add_argument('-b', '--batch-size', type=int, default=256,
                         help='批次大小 (默认256)')
     parser.add_argument('--wd', type=float, default=1e-4,
@@ -183,10 +195,19 @@ def get_args():
                         help='记录梯度/优化指标到 TensorBoard 的间隔（梯度步）')
     parser.add_argument('--update-per-step', type=float, default=0.5,
                         help='每个环境步执行的参数更新次数 (默认0.5)')
+    add_paper_logging_args(parser)
     args = parser.parse_args()
 
     if args.full_episode:
         args.episode_length = None
+    argv = sys.argv[1:]
+    has_epoch_flag = any(arg in ('--epoch', '-e') for arg in argv)
+    has_total_steps_flag = '--total-steps' in argv
+    if not has_epoch_flag and not has_total_steps_flag:
+        args.total_steps = 1_000_000
+    if args.total_steps is not None and args.total_steps > 0:
+        args.epoch = max(1, math.ceil(args.total_steps / args.step_per_epoch))
+
 
     if args.reward_normalization and args.n_step > 1:
         print("⚠️  提示: n_step>1 与奖励归一化不兼容，已自动关闭 reward_normalization")
@@ -218,6 +239,8 @@ def main():
     
     # 创建 TensorBoard writer 和增强的日志记录器
     writer = SummaryWriter(log_path)
+    # logger will be created after envs to inject metrics_getter
+    metrics_getter = None
     logger = EnhancedTensorboardLogger(
         writer=writer,
         total_epochs=args.epoch,
@@ -226,7 +249,9 @@ def main():
         verbose=True,  # True=详细格式，False=紧凑格式
         diffusion_steps=args.diffusion_steps,  # 扩散模型步数
         update_log_interval=args.log_update_interval,
-        step_per_epoch=args.step_per_epoch
+        step_per_epoch=args.step_per_epoch,
+        metrics_getter=None,  # placeholder, will be replaced later
+        png_interval=5,
     )
     
     # 打印配置
@@ -239,6 +264,12 @@ def main():
     
     # ========== 创建环境 ==========
     print("正在创建环境...")
+    expert_kwargs = None
+    if args.expert_type:
+        expert_kwargs = {}
+        if args.expert_type == 'mpc':
+            expert_kwargs['planning_steps'] = args.mpc_planning_steps
+
     env, train_envs, test_envs = make_building_env(
         building_type=args.building_type,
         weather_type=args.weather_type,
@@ -254,6 +285,7 @@ def main():
         violation_penalty=args.violation_penalty,
         reward_scale=args.reward_scale,  # 奖励缩放，降低Q值和损失的尺度
         expert_type=args.expert_type if args.bc_coef else None,
+        expert_kwargs=expert_kwargs,
         training_num=args.training_num,
         test_num=args.test_num,
         vector_env_type=args.vector_env_type
@@ -269,7 +301,32 @@ def main():
     print(f"  奖励缩放系数: {env.reward_scale}")
     if args.expert_type:
         print(f"  专家控制器: {args.expert_type}")
-    
+        if args.expert_type == 'mpc':
+            print(f"    - MPC 规划步数: {args.mpc_planning_steps}")
+
+    def _aggregate_metrics(vector_env):
+        if vector_env is None:
+            return None
+        env_list = getattr(vector_env, "_env_list", None)
+        if not env_list:
+            return None
+        values = [env_inst.consume_metrics() for env_inst in env_list]
+        values = [m for m in values if m]
+        if not values:
+            return None
+        result = {}
+        for key in ('avg_energy', 'avg_comfort_mean', 'avg_violations', 'avg_pue'):
+            nums = [m[key] for m in values if m.get(key) is not None]
+            if nums:
+                result[key] = float(np.mean(nums))
+        return result if result else None
+
+    def metrics_getter(mode: str):
+        target_env = train_envs if mode == 'train' else test_envs
+        return _aggregate_metrics(target_env)
+
+    logger.training_logger.metrics_getter = metrics_getter
+
     # ========== 创建网络 ==========
     print("\n正在创建神经网络...")
     state_dim = env.state_dim
@@ -366,8 +423,22 @@ def main():
         replay_buffer,
         exploration_noise=True
     )
-    
+
     test_collector = Collector(policy, test_envs)
+
+    # 仅在前 warmup_steps 关闭采集噪声，之后恢复默认噪声
+    warmup_noise_steps = 250_000
+
+    def train_fn(epoch: int, env_step: int):
+        """动态切换采集噪声：前 warmup_steps 关闭，之后开启。"""
+        if not hasattr(train_collector, "exploration_noise"):
+            return
+        enable_noise = env_step >= warmup_noise_steps
+        # 仅在状态变化时更新，避免反复赋值
+        if train_collector.exploration_noise != enable_noise:
+            train_collector.exploration_noise = enable_noise
+            status = "开启" if enable_noise else "关闭"
+            print(f"[train_fn] env_step={env_step}: 已{status}采集噪声")
     
     print(f"✓ 收集器创建成功")
     print(f"  训练环境数: {args.training_num}")
@@ -385,6 +456,34 @@ def main():
     print(f"  - 异常值会用 ⚠ 符号标记")
     print(f"  - 时间统计会自动估算剩余训练时间\n")
 
+    last_paper_epoch = {"value": None}
+
+    def save_checkpoint_fn(epoch, env_step, gradient_step):
+        if args.save_interval > 0 and epoch % args.save_interval == 0:
+            torch.save(
+                {
+                    'model': policy.state_dict(),
+                    'optim_actor': actor_optim.state_dict(),
+                    'optim_critic': critic_optim.state_dict(),
+                },
+                os.path.join(log_path, f'checkpoint_{epoch}.pth')
+            )
+        if args.paper_log and args.paper_log_interval > 0 and epoch % args.paper_log_interval == 0:
+            try:
+                print(f"\n[paper-log] Epoch {epoch}: collecting trajectories and plots ...")
+                run_paper_logging(
+                    env=env,
+                    policy=policy,
+                    actor=diffusion,
+                    guidance_fn=None,
+                    args=args,
+                    log_path=log_path,
+                )
+                last_paper_epoch["value"] = epoch
+            except Exception as exc:
+                print(f"[paper-log] Failed at epoch {epoch}: {exc}")
+        return None
+
     result = offpolicy_trainer(
         policy=policy,
         train_collector=train_collector,
@@ -401,14 +500,8 @@ def main():
             policy.state_dict(),
             os.path.join(log_path, 'policy_best.pth')
         ),
-        save_checkpoint_fn=lambda epoch, env_step, gradient_step: torch.save(
-            {
-                'model': policy.state_dict(),
-                'optim_actor': actor_optim.state_dict(),
-                'optim_critic': critic_optim.state_dict(),
-            },
-            os.path.join(log_path, f'checkpoint_{epoch}.pth')
-        ) if epoch % args.save_interval == 0 else None,
+        save_checkpoint_fn=save_checkpoint_fn,
+        train_fn=train_fn,
     )
     
     # ========== 训练完成 ==========
@@ -419,9 +512,26 @@ def main():
     
     # 保存最终模型
     torch.save(policy.state_dict(), os.path.join(log_path, 'policy_final.pth'))
+
+    if args.paper_log:
+        try:
+            if args.paper_log_interval > 0 and last_paper_epoch["value"] == args.epoch:
+                print("[paper-log] Skipped final logging (already captured at last epoch).")
+            else:
+                print("\n[paper-log] Collecting trajectories and plots ...")
+                run_paper_logging(
+                    env=env,
+                    policy=policy,
+                    actor=diffusion,
+                    guidance_fn=None,
+                    args=args,
+                    log_path=log_path,
+                )
+                print(f"[paper-log] Saved to: {os.path.join(log_path, 'paper_data')}")
+        except Exception as exc:
+            print(f"[paper-log] Failed: {exc}")
     print(f"\n✓ 模型已保存到: {log_path}")
 
 
 if __name__ == '__main__':
     main()
-

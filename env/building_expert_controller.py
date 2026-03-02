@@ -16,8 +16,11 @@ from typing import Optional, Tuple
 from abc import ABC, abstractmethod
 
 # 添加 BEAR 路径
-bear_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'bear')
-if bear_path not in sys.path:
+project_root = os.path.dirname(os.path.dirname(__file__))
+bear_path = os.path.join(project_root, 'BEAR')
+if not os.path.isdir(bear_path):
+    bear_path = os.path.join(project_root, 'bear')
+if os.path.isdir(bear_path) and bear_path not in sys.path:
     sys.path.insert(0, bear_path)
 
 from BEAR.Controller.MPC_Controller import MPCAgent
@@ -74,7 +77,7 @@ class BearMPCWrapper(BaseBearController):
         env,
         gamma: Optional[Tuple[float, float]] = None,
         safety_margin: float = 0.9,
-        planning_steps: int = 1
+        planning_steps: int = 3
     ):
         """
         初始化 MPC 控制器
@@ -168,7 +171,8 @@ class BearPIDController(BaseBearController):
         kp: float = 0.5,
         ki: float = 0.01,
         kd: float = 0.1,
-        integral_limit: float = 10.0
+        integral_limit: float = 10.0,
+        deadband: Optional[float] = None
     ):
         """
         初始化 PID 控制器
@@ -191,6 +195,7 @@ class BearPIDController(BaseBearController):
         self.integral = np.zeros(self.roomnum)  # 积分项
         self.last_error = np.zeros(self.roomnum)  # 上一次误差
         self.first_step = True  # 是否是第一步
+        self.deadband = deadband if deadband is not None else env.temp_tolerance
     
     def get_action(self, state: np.ndarray) -> np.ndarray:
         """
@@ -207,6 +212,11 @@ class BearPIDController(BaseBearController):
         
         # 计算温度误差（当前温度 - 目标温度）
         error = zone_temps - self.target_temp
+        if self.deadband is not None and self.deadband > 0:
+            mask = np.abs(error) <= self.deadband
+            if np.any(mask):
+                error = error.copy()
+                error[mask] = 0.0
         
         # 比例项
         p_term = self.kp * error

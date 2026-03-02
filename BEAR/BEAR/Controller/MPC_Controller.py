@@ -6,7 +6,7 @@ class MPCAgent(object):
                  planning_steps=1):
         self.gamma = gamma
         self.safety_margin = safety_margin
-        self.planning_steps=planning_steps
+        self.planning_steps=max(1, planning_steps)
         self.action_space=environment.action_space
         self.Qlow=environment.Qlow
         self.num_of_state=environment.roomnum
@@ -76,7 +76,24 @@ class MPCAgent(object):
 
         prob = cp.Problem(cp.Minimize(obj), constr)
 
-        prob.solve(solver='ECOS_BB')
+        # Try multiple solvers to improve robustness
+        solver_candidates = [
+            ('ECOS_BB', {}),
+            ('ECOS', {}),
+            ('OSQP', {}),
+            ('SCS', {'eps': 1e-4, 'max_iters': 5000}),
+        ]
+        solved = False
+        for solver_name, extra_kwargs in solver_candidates:
+            try:
+                prob.solve(solver=solver_name, warm_start=True, **extra_kwargs)
+            except cp.SolverError:
+                continue
+            if prob.status in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
+                solved = True
+                break
+        if not solved or u.value is None:
+            raise RuntimeError("MPC solver failed to find a valid solution")
 
         state=x[:, 1].value
         if self.spacetype == 'continuous':
@@ -160,7 +177,23 @@ class MPCAgent_DataDriven(object):
 
         prob = cp.Problem(cp.Minimize(obj), constr)
 
-        prob.solve(solver='ECOS_BB')
+        solver_candidates = [
+            ('ECOS_BB', {}),
+            ('ECOS', {}),
+            ('OSQP', {}),
+            ('SCS', {'eps': 1e-4, 'max_iters': 5000}),
+        ]
+        solved = False
+        for solver_name, extra_kwargs in solver_candidates:
+            try:
+                prob.solve(solver=solver_name, warm_start=True, **extra_kwargs)
+            except cp.SolverError:
+                continue
+            if prob.status in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
+                solved = True
+                break
+        if not solved or u.value is None:
+            raise RuntimeError("MPC solver failed to find a valid solution")
 
         state=x[:, 1].value
         if self.spacetype == 'continuous':

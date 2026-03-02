@@ -5,14 +5,22 @@
 
 import time
 import math
-from typing import Dict, Any, Optional
+import os
+from typing import Dict, Any, Optional, Callable
 from datetime import datetime, timedelta
 
 
 class TrainingLogger:
     """训练日志格式化器"""
 
-    def __init__(self, total_epochs: int, reward_scale: float = 1.0, diffusion_steps: int = None):
+    def __init__(
+        self,
+        total_epochs: int,
+        reward_scale: float = 1.0,
+        diffusion_steps: int = None,
+        metrics_getter: Optional[Callable[[str], Optional[Dict[str, float]]]] = None,
+        context_info: Optional[Dict[str, Any]] = None,
+    ):
         """
         初始化日志格式化器
 
@@ -24,6 +32,8 @@ class TrainingLogger:
         self.total_epochs = total_epochs  # 总轮次
         self.reward_scale = reward_scale  # 奖励缩放系数
         self.diffusion_steps = diffusion_steps  # 扩散步数
+        self.metrics_getter = metrics_getter
+        self.context_info = context_info or {}
         self.start_time = time.time()  # 训练开始时间
         self.last_epoch_time = time.time()  # 上一轮次时间
         self.epoch_times = []  # 每轮耗时记录
@@ -77,7 +87,9 @@ class TrainingLogger:
         self,
         epoch: int,
         train_result: Dict[str, Any],
-        test_result: Optional[Dict[str, Any]] = None
+        test_result: Optional[Dict[str, Any]] = None,
+        train_metrics: Optional[Dict[str, float]] = None,
+        test_metrics: Optional[Dict[str, float]] = None,
     ):
         """
         记录并格式化输出一个epoch的训练信息
@@ -86,6 +98,8 @@ class TrainingLogger:
         - epoch: 当前轮次
         - train_result: 训练结果字典
         - test_result: 测试结果字典（可选）
+        - train_metrics: 训练环境指标（可选，已预取）
+        - test_metrics: 测试环境指标（可选，已预取）
         """
         # 计算时间统计
         current_time = time.time()
@@ -105,6 +119,7 @@ class TrainingLogger:
         # 提取关键指标
         actor_loss = train_result.get('loss/actor', 0.0)
         critic_loss = train_result.get('loss/critic', 0.0)
+        bc_loss = train_result.get('loss/bc', None)
         actor_grad = train_result.get('grad_norm/actor', 0.0)
         critic_grad = train_result.get('grad_norm/critic', 0.0)
 
@@ -123,7 +138,7 @@ class TrainingLogger:
 
         # 探索率
         exploration_noise = train_result.get('exploration/noise', 0.0)
-        
+
         # 打印格式化的日志
         print("\n" + "=" * 80)
         epoch_info = f"  Epoch {epoch}/{self.total_epochs}  [{epoch/self.total_epochs*100:.1f}%]"
@@ -131,6 +146,19 @@ class TrainingLogger:
             epoch_info += f"  | 扩散步数: {self.diffusion_steps}"
         print(epoch_info)
         print("=" * 80)
+
+        # 上下文提示信息（静态）
+        if self.context_info:
+            sup_steps = self.context_info.get('support_steps')
+            state_dim = self.context_info.get('state_dim')
+            action_dim = self.context_info.get('action_dim')
+            context_dim = self.context_info.get('context_dim')
+            token_dim = self.context_info.get('token_dim')
+            summary_dim = self.context_info.get('summary_dim')
+            print("\n上下文配置:")
+            print(f"  支持步数: {sup_steps}")
+            print(f"  状态维度: {state_dim} | 动作维度: {action_dim}")
+            print(f"  token维度: {token_dim} | 摘要维度: {summary_dim} | 上下文维度: {context_dim}")
         
         # 损失指标
         print("\n📊 损失指标:")
@@ -138,6 +166,8 @@ class TrainingLogger:
         critic_indicator = self.get_indicator(critic_loss, self.thresholds['critic_loss_high'])
         print(f"  {actor_indicator} Actor损失:     {actor_loss:>10.3f}")
         print(f"  {critic_indicator} Critic损失:    {critic_loss:>10.3f}")
+        if bc_loss is not None:
+            print(f"BC损失:       {bc_loss:>10.3f}")
         
         # 梯度信息
         print("\n📈 梯度范数:")
@@ -154,7 +184,21 @@ class TrainingLogger:
         print(f"  真实训练奖励:   {train_reward/self.reward_scale:>10.2f}")
         if test_result:
             print(f"  真实测试奖励:   {test_reward/self.reward_scale:>10.2f}")
-        
+
+        if self.metrics_getter:
+            if train_metrics is None:
+                train_metrics = self.metrics_getter('train')
+            if test_metrics is None:
+                test_metrics = self.metrics_getter('test')
+            print("\n\U0001f321\ufe0f \u73af\u5883\u6307\u6807:")
+            if train_metrics:
+                self._print_env_metrics("\u8bad\u7ec3", train_metrics)
+            else:
+                print("  \u8bad\u7ec3: \u6682\u65e0\u6307\u6807\uff0c\u7b49\u5f85\u63d0\u4ea4 episode \u6570\u636e")
+            if test_metrics:
+                self._print_env_metrics("\u6d4b\u8bd5", test_metrics)
+            elif test_result is not None:
+                print("  \u6d4b\u8bd5: \u6682\u65e0\u6307\u6807\uff0c\u7b49\u5f85\u63d0\u4ea4 episode \u6570\u636e")
         # Q值统计
         print("\n💎 Q值统计:")
         print(f"  Q均值:          {q_mean:>10.3f}")
@@ -187,6 +231,23 @@ class TrainingLogger:
                 print(f"  - {warning}")
         
         print("\n" + "=" * 80)
+
+    def _print_env_metrics(self, label: str, metrics: Dict[str, Optional[float]]) -> None:
+        energy = metrics.get('avg_energy')
+        comfort = metrics.get('avg_comfort_mean')
+        violations = metrics.get('avg_violations')
+        pue = metrics.get('avg_pue')
+        parts = []
+        if energy is not None:
+            parts.append(f"平均能耗: {energy:.2f} kWh")
+        if comfort is not None:
+            parts.append(f"平均温差: {comfort:.2f} °C")
+        if violations is not None:
+            parts.append(f"平均越界: {violations:.2f}")
+        if pue is not None:
+            parts.append(f"PUE: {pue:.3f}")
+        if parts:
+            print(f"  {label}: " + " | ".join(parts))
     
     def log_compact(
         self,
@@ -297,7 +358,13 @@ class EnhancedTensorboardLogger:
 
     def __init__(self, writer, total_epochs: int, reward_scale: float = 1.0,
                  log_interval: int = 1, verbose: bool = True, diffusion_steps: int = None,
-                 update_log_interval: int = 1, step_per_epoch: int = 1):
+                 update_log_interval: int = 1, step_per_epoch: int = 1,
+                 metrics_getter: Optional[Callable[[str], Optional[Dict[str, float]]]] = None,
+                 context_info: Optional[Dict[str, Any]] = None,
+                 train_eval_collector=None,
+                 train_eval_episodes: int = 1,
+                 png_interval: int = 0,
+                 png_dir: Optional[str] = None):
         """
         初始化增强日志记录器
 
@@ -312,20 +379,32 @@ class EnhancedTensorboardLogger:
         from tianshou.utils import TensorboardLogger
 
         self.tb_logger = TensorboardLogger(writer)  # 原始TensorBoard logger
-        self.training_logger = TrainingLogger(total_epochs, reward_scale, diffusion_steps)  # 终端日志格式化器
+        self.training_logger = TrainingLogger(
+            total_epochs,
+            reward_scale,
+            diffusion_steps,
+            metrics_getter=metrics_getter,
+            context_info=context_info,
+        )  # 终端日志格式化器
         self.log_interval = log_interval  # epoch日志输出间隔
         self.verbose = verbose  # 是否详细输出
         self.writer = writer  # TensorBoard writer
         self.update_log_interval = max(1, update_log_interval)  # 梯度日志抽样间隔
         self.step_per_epoch = max(1, step_per_epoch)
+        self.png_interval = max(0, png_interval)  # 生成PNG的间隔（epoch），0表示关闭
+        self.png_dir = png_dir or getattr(writer, "log_dir", None)
 
         # 初始化结果缓存
         self._last_train_result = {}
         self._last_test_result = {}
         self._last_update_result = {}
+        self._last_train_eval_result = None
         self._current_epoch = 0
         self._last_output_epoch = -1  # 记录上次输出的epoch，避免重复输出
         self._has_update_data = False  # 标记是否有更新数据
+        self.train_eval_collector = train_eval_collector
+        self.train_eval_episodes = max(1, train_eval_episodes)
+        self._metric_history: Dict[str, Dict[str, list]] = {"train": {}, "test": {}}
 
     def write(self, step_type: str, step: int, data: Dict[str, Any]):
         """
@@ -353,6 +432,13 @@ class EnhancedTensorboardLogger:
         """恢复数据（兼容Tianshou的Logger接口）"""
         return self.tb_logger.restore_data()
 
+    def log_info_data(self, log_data: Dict[str, Any], step: int):
+        """记录训练器整体信息（兼容 tianshou>=1.2 的 BaseLogger 接口）。"""
+        if hasattr(self.tb_logger, "log_info_data"):
+            self.tb_logger.log_info_data(log_data, step)
+        else:
+            self.tb_logger.write("info", step, log_data)
+
     def log_test_data(self, collect_result: Dict[str, Any], step: int):
         """
         记录测试数据（兼容Tianshou的Logger接口）
@@ -368,6 +454,18 @@ class EnhancedTensorboardLogger:
         self._last_test_result = collect_result
         # 根据 env_step 推算当前 epoch
         self._current_epoch = max(1, math.ceil(step / self.step_per_epoch))
+
+        # 额外评估训练任务，获得与测试相同标准的训练奖励
+        if self.train_eval_collector is not None:
+            try:
+                self._last_train_eval_result = self.train_eval_collector.collect(
+                    n_episode=self.train_eval_episodes
+                )
+            except Exception as exc:
+                print(f"警告: 训练集评估失败: {exc}")
+                self._last_train_eval_result = None
+        else:
+            self._last_train_eval_result = None
 
         # 输出到终端（测试后输出）
         self._output_to_terminal()
@@ -440,9 +538,152 @@ class EnhancedTensorboardLogger:
         train_result = self._last_train_result.copy()
         test_result = self._last_test_result.copy() if self._last_test_result else None
 
+        # 如果存在额外的训练集评估结果，则使用其奖励替换原训练奖励，保证可比性
+        if self._last_train_eval_result:
+            eval_reward = self._last_train_eval_result.get(
+                'train/reward',
+                self._last_train_eval_result.get('rew')
+            )
+            if eval_reward is not None:
+                train_result['train/reward'] = eval_reward
+            eval_len = self._last_train_eval_result.get('len')
+            if eval_len is not None:
+                train_result['train/len'] = eval_len
+
+        train_metrics = None
+        test_metrics = None
+        if self.training_logger.metrics_getter:
+            try:
+                train_metrics = self.training_logger.metrics_getter("train")
+                test_metrics = self.training_logger.metrics_getter("test")
+            except Exception as exc:
+                print(f"警告: 获取环境指标失败 {exc}")
+
         # 输出到终端
         if self.verbose:
-            self.training_logger.log_epoch(self._current_epoch, train_result, test_result)
+            self.training_logger.log_epoch(
+                self._current_epoch,
+                train_result,
+                test_result,
+                train_metrics=train_metrics,
+                test_metrics=test_metrics,
+            )
         else:
             self.training_logger.log_compact(self._current_epoch, train_result, test_result)
 
+        self._log_env_metrics(train_metrics, test_metrics)
+        self._log_basic_scalars(train_result, test_result)
+        self._maybe_save_png(self._current_epoch)
+
+    def _record_metric(self, mode: str, name: str, value: Optional[float], epoch: int, write_tb: bool = True) -> None:
+        if value is None:
+            return
+        if write_tb and self.writer is not None:
+            try:
+                self.writer.add_scalar(f"{mode}/{name}", value, epoch)
+            except Exception as exc:
+                print(f"警告: 写入指标 {mode}/{name} 失败: {exc}")
+        hist = self._metric_history.setdefault(mode, {}).setdefault(name, [])
+        hist.append((epoch, value))
+
+    def _log_env_metrics(
+        self,
+        train_metrics: Optional[Dict[str, float]],
+        test_metrics: Optional[Dict[str, float]],
+    ) -> None:
+        """写入环境级指标到 TensorBoard并记录历史。"""
+        epoch = self._current_epoch
+        for mode, metrics in (("train", train_metrics), ("test", test_metrics)):
+            if not metrics:
+                continue
+            for name, value in metrics.items():
+                self._record_metric(mode, name, value, epoch, write_tb=True)
+
+    def _log_basic_scalars(
+        self,
+        train_result: Dict[str, Any],
+        test_result: Optional[Dict[str, Any]],
+    ) -> None:
+        """记录基础标量（奖励等），用于PNG即便环境指标缺失。"""
+        epoch = self._current_epoch
+        train_reward = train_result.get('train/reward', train_result.get('rew', train_result.get('rews')))
+        self._record_metric("train", "reward", train_reward, epoch, write_tb=False)
+        if test_result:
+            test_reward = test_result.get('test/reward', test_result.get('rew', test_result.get('rews')))
+            self._record_metric("test", "reward", test_reward, epoch, write_tb=False)
+
+    def _maybe_save_png(self, epoch: int) -> None:
+        """根据设定的间隔保存PNG曲线，不影响训练流程。"""
+        if self.png_interval <= 0:
+            return
+        if epoch % self.png_interval != 0:
+            return
+        try:
+            import matplotlib.pyplot as plt  # type: ignore
+        except Exception as exc:
+            print(f"警告: matplotlib 不可用，无法生成PNG: {exc}")
+            return
+
+        save_dir = self.png_dir or "."
+        save_dir = os.path.join(save_dir, "figs")
+        os.makedirs(save_dir, exist_ok=True)
+
+        for mode, metrics_dict in self._metric_history.items():
+            for metric_name, series in metrics_dict.items():
+                if not series:
+                    continue
+                xs, ys = zip(*series)
+                plt.figure(figsize=(5, 3))
+                plt.plot(xs, ys, label=f"{mode}-{metric_name}", color="#1f77b4")
+                plt.xlabel("Epoch")
+                plt.ylabel(metric_name)
+                plt.title(f"{metric_name} ({mode})")
+                plt.grid(True, alpha=0.3)
+                plt.legend()
+                plt.ylim(bottom=0)  # 统一从0起始，便于对比
+                safe_name = metric_name.replace("/", "_")
+                fname = f"{mode}_{safe_name}_epoch{epoch:05d}.png"
+                fpath = os.path.join(save_dir, fname)
+                try:
+                    plt.tight_layout()
+                    plt.savefig(fpath, dpi=150)
+                except Exception as exc:
+                    print(f"警告: 保存PNG失败 {fpath}: {exc}")
+                finally:
+                    plt.close()
+
+        reward_series = {}
+        for mode in ("train", "test"):
+            series = self._metric_history.get(mode, {}).get("reward")
+            if series:
+                reward_series[mode] = series
+
+        if reward_series:
+            plt.figure(figsize=(5, 3))
+            y_values = []
+            for mode, series in reward_series.items():
+                xs, ys = zip(*series)
+                y_values.extend(ys)
+                plt.plot(xs, ys, label=f"{mode}-reward")
+            plt.xlabel("Epoch")
+            plt.ylabel("reward")
+            plt.title("Reward (train vs test)")
+            plt.grid(True, alpha=0.3)
+            plt.legend()
+            if y_values:
+                ymin = min(y_values)
+                ymax = max(y_values)
+                if ymin == ymax:
+                    ymin -= 1.0
+                span = abs(ymax - ymin)
+                margin = 0.05 * span if span > 0 else 1.0
+                # 奖励通常为负，将0作为上界，向下预留一定空白
+                plt.ylim(bottom=ymin - margin, top=0)
+            reward_path = os.path.join(save_dir, f"reward_epoch{epoch:05d}.png")
+            try:
+                plt.tight_layout()
+                plt.savefig(reward_path, dpi=150)
+            except Exception as exc:
+                print(f"警告: 保存奖励PNG失败 {reward_path}: {exc}")
+            finally:
+                plt.close()

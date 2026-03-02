@@ -7,7 +7,7 @@
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, List, Optional
 import pandas as pd
 from .thermal_model import ThermalModel
 from .expert_controller import ExpertController
@@ -147,6 +147,8 @@ class DataCenterEnv(gym.Env):
         self._terminated = False
         self._episode_energy = 0.0  # 累积能耗
         self._episode_violations = 0  # 温度越界次数
+        self._episode_records: List[Dict[str, float]] = []
+        self._reset_metrics()
         
         # 内部物理状态
         self.T_in = target_temp      # 机房温度
@@ -154,6 +156,32 @@ class DataCenterEnv(gym.Env):
         self.H_in = 50.0             # 机房湿度
         self.IT_load = 200.0         # IT负载
         self.T_supply = np.ones(num_crac_units) * 20.0  # 各CRAC供风温度
+
+    def _reset_metrics(self) -> None:
+        """重置直接监控的episode级指标累加器。"""
+        self._metric_energy_sum = 0.0
+        self._metric_pue_sum = 0.0
+        self._metric_pue_steps = 0
+        self._metric_violation_sum = 0.0
+        self._metric_steps = 0
+
+    def _finalize_episode(self) -> None:
+        """在episode结束时汇总指标。"""
+        if self._metric_steps == 0:
+            return
+        avg_pue = None
+        if self._metric_pue_steps:
+            avg_pue = self._metric_pue_sum / self._metric_pue_steps
+        avg_violations = self._metric_violation_sum / self._metric_steps if self._metric_steps else None
+        record = {
+            'avg_energy': float(self._episode_energy),
+            'avg_pue': float(avg_pue) if avg_pue is not None else None,
+            'avg_violations': float(avg_violations) if avg_violations is not None else None,
+        }
+        self._episode_records.append(record)
+        self._reset_metrics()
+        self._episode_energy = 0.0
+        self._episode_violations = 0
         
     def reset(self, seed=None, options=None):
         """
@@ -178,6 +206,7 @@ class DataCenterEnv(gym.Env):
         self._episode_energy = 0.0
         self._episode_violations = 0
         self._last_reward = 0.0
+        self._reset_metrics()
 
         # ========== 随机初始化物理状态 ==========
         # 机房温度：目标温度附近随机扰动
@@ -284,6 +313,7 @@ class DataCenterEnv(gym.Env):
 
         # ========== 动作处理 ==========
         T_set, fan_speed = self._denormalize_action(action)
+        current_it_load = float(self.IT_load)
 
         # ========== 获取专家动作（用于行为克隆） ==========
         expert_action = self.expert_controller.get_action(
@@ -303,6 +333,11 @@ class DataCenterEnv(gym.Env):
             T_set=T_set,
             fan_speed=fan_speed
         )
+        timestep_hours = max(self.time_step, 1e-6)
+        cooling_power_kw = energy_consumed / timestep_hours
+        pue = None
+        if current_it_load > 1e-6:
+            pue = (cooling_power_kw + current_it_load) / current_it_load
 
         # ========== 更新外部扰动 ==========
         self._num_steps += 1
@@ -348,6 +383,13 @@ class DataCenterEnv(gym.Env):
         temp_violation = next_T_in < self.T_min or next_T_in > self.T_max
         if temp_violation:
             self._episode_violations += 1
+        self._metric_energy_sum += energy_consumed
+        if pue is not None:
+            self._metric_pue_sum += pue
+            self._metric_pue_steps += 1
+        self._metric_violation_sum += int(temp_violation)
+        self._metric_steps += 1
+        episode_pue_mean = self._metric_pue_sum / self._metric_pue_steps if self._metric_pue_steps else None
 
         # ========== 构造下一状态 ==========
         next_state = self._get_state()
@@ -360,6 +402,7 @@ class DataCenterEnv(gym.Env):
 
         if terminated or truncated:
             self._terminated = True
+            self._finalize_episode()
 
         # ========== 返回信息 ==========
         info = {
@@ -369,6 +412,8 @@ class DataCenterEnv(gym.Env):
             'T_out': self.T_out,             # 室外温度
             'IT_load': self.IT_load,         # IT负载
             'temp_violation': temp_violation,
+            'pue': pue,
+            'episode_pue_mean': episode_pue_mean,
             'episode_energy': self._episode_energy,  # 累积能耗
             'episode_violations': self._episode_violations,  # 累积越界次数
             **reward_info  # 奖励分解信息
@@ -458,6 +503,33 @@ class DataCenterEnv(gym.Env):
             print(f"  累积能耗: {self._episode_energy:.2f}kWh")
             print(f"  温度越界次数: {self._episode_violations}")
     
+    def consume_metrics(self):
+        """返回并清空已完成episode的环境指标。"""
+        if self._episode_records:
+            records = self._episode_records
+            self._episode_records = []
+        elif self._metric_steps > 0:
+            avg_pue = (self._metric_pue_sum / self._metric_pue_steps) if self._metric_pue_steps else None
+            return {
+                'avg_energy': float(self._metric_energy_sum),
+                'avg_pue': float(avg_pue) if avg_pue is not None else None,
+                'avg_violations': float(self._metric_violation_sum / self._metric_steps),
+            }
+        else:
+            return None
+
+        def _avg(key: str):
+            values = [rec[key] for rec in records if rec.get(key) is not None]
+            if not values:
+                return None
+            return float(np.mean(values))
+
+        return {
+            'avg_energy': _avg('avg_energy'),
+            'avg_pue': _avg('avg_pue'),
+            'avg_violations': _avg('avg_violations'),
+        }
+
     def close(self):
         """
         清理资源
@@ -491,9 +563,20 @@ def make_datacenter_env(
     
     env = env_factory()
     vector_cls = DummyVectorEnv if vector_env_type != 'subproc' else SubprocVectorEnv
+
+    def _build_vector_env(num: int):
+        instances: List[DataCenterEnv] = []
+
+        def factory():
+            inst = env_factory()
+            instances.append(inst)
+            return inst
+
+        vec = vector_cls([factory for _ in range(num)])
+        setattr(vec, "_env_list", instances)
+        return vec
     
-    train_envs = vector_cls([env_factory for _ in range(training_num)])
-    test_envs = vector_cls([env_factory for _ in range(test_num)])
+    train_envs = _build_vector_env(training_num)
+    test_envs = _build_vector_env(test_num)
     
     return env, train_envs, test_envs
-

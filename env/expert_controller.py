@@ -1,436 +1,245 @@
 # ========================================
-# 专家控制器
+# 数据中心专家控制器
 # ========================================
-# 提供专家动作用于行为克隆训练
-# 支持PID、MPC、基于规则的控制器
+# 提供 PID / 简化 MPC / 规则基线，便于和强化学习策略对比
+
+from __future__ import annotations
+
+from collections import deque
+from typing import Dict, Type
 
 import numpy as np
-from typing import Tuple, List
-from collections import deque
 
 
 class ExpertController:
     """
-    专家控制器基类
-    
-    为数据中心空调提供专家动作（用于行为克隆训练）
+    专家控制器统一封装
+
+    - 通过 controller_type 在 PID、MPC、规则控制之间切换
+    - 输出动作已归一化到 [-1, 1]，可直接送入环境
     """
-    
+
+    _CONTROLLER_MAP: Dict[str, Type["_BaseController"]] = {}
+
     def __init__(
         self,
         num_crac: int = 4,
         target_temp: float = 24.0,
-        controller_type: str = 'pid'
-    ):
-        """
-        初始化专家控制器
-        
-        参数：
-        - num_crac: CRAC单元数量
-        - target_temp: 目标温度 (°C)
-        - controller_type: 控制器类型 ('pid', 'mpc', 'rule_based')
-        """
-        self.num_crac = num_crac
-        self.target_temp = target_temp
-        self.controller_type = controller_type
-        
-        # 根据类型初始化具体控制器
-        if controller_type == 'pid':
-            self.controller = PIDController(num_crac, target_temp)
-        elif controller_type == 'mpc':
-            self.controller = MPCController(num_crac, target_temp)
-        elif controller_type == 'rule_based':
-            self.controller = RuleBasedController(num_crac, target_temp)
-        else:
+        controller_type: str = "pid",
+        **controller_kwargs,
+    ) -> None:
+        controller_type = controller_type.lower()
+        if not self._CONTROLLER_MAP:
+            # 延迟注册以避免类定义顺序影响
+            self._CONTROLLER_MAP = {
+                "pid": PIDController,
+                "mpc": MPCController,
+                "rule_based": RuleBasedController,
+                "rule": RuleBasedController,
+            }
+        controller_cls = self._CONTROLLER_MAP.get(controller_type)
+        if controller_cls is None:
             raise ValueError(f"未知的控制器类型: {controller_type}")
-    
-    def get_action(
-        self,
-        T_in: float,
-        T_out: float,
-        H_in: float,
-        IT_load: float
-    ) -> np.ndarray:
-        """
-        获取专家动作（归一化到[-1, 1]）
-        
-        参数：
-        - T_in: 机房温度 (°C)
-        - T_out: 室外温度 (°C)
-        - H_in: 机房湿度 (%)
-        - IT_load: IT负载 (kW)
-        
-        返回：
-        - action: 归一化动作向量 (2*num_crac,)
-        """
-        return self.controller.get_action(T_in, T_out, H_in, IT_load)
+        self.controller = controller_cls(
+            num_crac=num_crac,
+            target_temp=target_temp,
+            **controller_kwargs,
+        )
+
+    def get_action(self, T_in: float, T_out: float, H_in: float, IT_load: float) -> np.ndarray:
+        """统一的专家动作接口"""
+        return self.controller.get_action(T_in=T_in, T_out=T_out, H_in=H_in, IT_load=IT_load)
+
+    def reset(self) -> None:
+        """重置内部控制器状态"""
+        reset_fn = getattr(self.controller, "reset", None)
+        if callable(reset_fn):
+            reset_fn()
 
 
-class PIDController:
-    """
-    PID控制器
-    
-    经典的比例-积分-微分控制
-    适用于温度控制等单变量系统
-    """
-    
-    def __init__(
-        self,
-        num_crac: int = 4,
-        target_temp: float = 24.0,
-        Kp: float = 2.0,    # 比例增益
-        Ki: float = 0.1,    # 积分增益
-        Kd: float = 0.5,    # 微分增益
-        dt: float = 5.0,    # 时间步长（分钟），修复：添加dt参数
-    ):
+class _BaseController:
+    """控制器基类，仅约定接口，便于类型提示"""
+
+    def __init__(self, num_crac: int, target_temp: float) -> None:
         self.num_crac = num_crac
         self.target_temp = target_temp
-
-        # PID参数
-        self.Kp = Kp
-        self.Ki = Ki
-        self.Kd = Kd
-        self.dt = dt  # 修复：保存时间步长
-
-        # 状态变量
-        self.error_integral = 0.0  # 积分项
-        self.last_error = 0.0      # 上一次误差（用于微分）
-        self.error_history = deque(maxlen=10)  # 误差历史
-
-        # 动作范围
         self.T_set_min = 18.0
         self.T_set_max = 28.0
         self.fan_min = 0.3
         self.fan_max = 1.0
-    
-    def get_action(
+
+    def get_action(self, T_in: float, T_out: float, H_in: float, IT_load: float) -> np.ndarray:
+        raise NotImplementedError
+
+    def _normalize_action(self, T_set: np.ndarray, fan_speed: np.ndarray) -> np.ndarray:
+        """将物理动作映射到 [-1, 1]"""
+        T_norm = 2.0 * (T_set - self.T_set_min) / (self.T_set_max - self.T_set_min) - 1.0
+        fan_norm = 2.0 * (fan_speed - self.fan_min) / (self.fan_max - self.fan_min) - 1.0
+        action = np.empty(2 * self.num_crac, dtype=np.float32)
+        action[0::2] = T_norm
+        action[1::2] = fan_norm
+        return action
+
+
+class PIDController(_BaseController):
+    """
+    经典 PID 控制
+
+    - 误差: e = T_in - target_temp
+    - 输出: u = Kp * e + Ki * ∫e + Kd * de/dt
+    - 控制律: 误差大 -> 降低设定温度 / 提高风速
+    """
+
+    def __init__(
         self,
-        T_in: float,
-        T_out: float,
-        H_in: float,
-        IT_load: float
-    ) -> np.ndarray:
-        """
-        PID控制逻辑
-        
-        控制策略：
-        1. 计算温度误差 e = T_in - T_target
-        2. PID输出：u = Kp*e + Ki*∫e + Kd*de/dt
-        3. 根据u调整设定温度和风速
-        """
-        # ========== 1. 计算误差 ==========
+        num_crac: int = 4,
+        target_temp: float = 24.0,
+        Kp: float = 2.0,
+        Ki: float = 0.05,
+        Kd: float = 0.5,
+        dt_minutes: float = 5.0,
+    ) -> None:
+        super().__init__(num_crac=num_crac, target_temp=target_temp)
+        self.Kp = Kp
+        self.Ki = Ki
+        self.Kd = Kd
+        self.dt = max(dt_minutes, 1e-3)
+        self.error_integral = 0.0
+        self.last_error = 0.0
+        self.error_history: deque[float] = deque(maxlen=10)
+
+    def get_action(self, T_in: float, T_out: float, H_in: float, IT_load: float) -> np.ndarray:
         error = T_in - self.target_temp
         self.error_history.append(error)
-        
-        # ========== 2. PID计算 ==========
-        # 比例项
-        P = self.Kp * error
-
-        # 积分项（带抗饱和）
-        self.error_integral += error * self.dt  # 修复：积分项乘以dt
-        self.error_integral = np.clip(self.error_integral, -10.0, 10.0)
-        I = self.Ki * self.error_integral
-
-        # 微分项（修复：除以dt进行归一化）
-        if len(self.error_history) >= 2:
-            D = self.Kd * (error - self.last_error) / self.dt
-        else:
-            D = 0.0
-
-        # PID输出
-        u = P + I + D
-        
-        # 更新状态
+        self.error_integral += error * self.dt
+        self.error_integral = float(np.clip(self.error_integral, -20.0, 20.0))
+        derivative = (error - self.last_error) / self.dt if self.error_history else 0.0
+        u = self.Kp * error + self.Ki * self.error_integral + self.Kd * derivative
         self.last_error = error
-        
-        # ========== 3. 转换为控制动作 ==========
-        # 设定温度：误差大时降低设定温度
-        T_set_base = self.target_temp - 0.5 * u
-        T_set_base = np.clip(T_set_base, self.T_set_min, self.T_set_max)
-        
-        # 风速：根据误差和负载调整
-        fan_base = 0.5 + 0.1 * u + 0.0005 * IT_load
-        fan_base = np.clip(fan_base, self.fan_min, self.fan_max)
-        
-        # ========== 4. 负载均衡策略 ==========
-        # 所有CRAC使用相同设定（简化）
-        T_set = np.ones(self.num_crac) * T_set_base
-        fan_speed = np.ones(self.num_crac) * fan_base
-        
-        # 根据室外温度微调（利用自然冷却）
-        if T_out < self.target_temp - 5:
-            # 室外温度低，可以降低风速节能
-            fan_speed *= 0.8
-        
-        # ========== 5. 归一化到[-1, 1] ==========
-        action = self._normalize_action(T_set, fan_speed)
-        
-        return action
-    
-    def _normalize_action(
-        self,
-        T_set: np.ndarray,
-        fan_speed: np.ndarray
-    ) -> np.ndarray:
-        """
-        将物理动作归一化到[-1, 1]
-        """
-        # 温度归一化
-        T_set_norm = 2.0 * (T_set - self.T_set_min) / (self.T_set_max - self.T_set_min) - 1.0
-        
-        # 风速归一化
-        fan_norm = 2.0 * (fan_speed - self.fan_min) / (self.fan_max - self.fan_min) - 1.0
-        
-        # 交错排列：[T1, fan1, T2, fan2, ...]
-        action = np.empty(2 * self.num_crac)
-        action[0::2] = T_set_norm
-        action[1::2] = fan_norm
-        
-        return action
-    
-    def reset(self):
-        """重置控制器状态"""
+
+        T_set = np.clip(self.target_temp - 0.4 * u, self.T_set_min, self.T_set_max)
+        fan = np.clip(0.55 + 0.12 * u + 0.0004 * IT_load, self.fan_min, self.fan_max)
+        if T_out < self.target_temp - 5.0:
+            fan *= 0.8  # 室外冷时顺势节能
+        T_cmd = np.full(self.num_crac, T_set, dtype=np.float32)
+        fan_cmd = np.full(self.num_crac, fan, dtype=np.float32)
+        return self._normalize_action(T_cmd, fan_cmd)
+
+    def reset(self) -> None:
         self.error_integral = 0.0
         self.last_error = 0.0
         self.error_history.clear()
 
 
-class MPCController:
+class MPCController(_BaseController):
     """
-    模型预测控制器（简化版）
-    
-    基于模型预测未来状态，优化控制序列
-    这里使用简化的启发式规则模拟MPC行为
+    简化模型预测控制
+
+    - 通过线性热模型预估未来温度
+    - 穷举候选动作组合，选择预测代价最小的一组
     """
-    
+
     def __init__(
         self,
         num_crac: int = 4,
         target_temp: float = 24.0,
-        prediction_horizon: int = 6,  # 预测时域（步）
-    ):
-        self.num_crac = num_crac
-        self.target_temp = target_temp
-        self.horizon = prediction_horizon
-        
-        # 动作范围
-        self.T_set_min = 18.0
-        self.T_set_max = 28.0
-        self.fan_min = 0.3
-        self.fan_max = 1.0
-        
-        # 历史数据（用于模型辨识）
-        self.T_history = deque(maxlen=20)
-        self.load_history = deque(maxlen=20)
-    
-    def get_action(
+        prediction_horizon: int = 6,
+    ) -> None:
+        super().__init__(num_crac=num_crac, target_temp=target_temp)
+        self.horizon = max(prediction_horizon, 1)
+        self.last_T_in = target_temp
+
+        # 候选动作集合（温度设定、风速的粗网格）
+        self._candidate_T = np.linspace(self.T_set_min, self.T_set_max, num=5)
+        self._candidate_fan = np.linspace(self.fan_min, self.fan_max, num=5)
+
+    def get_action(self, T_in: float, T_out: float, H_in: float, IT_load: float) -> np.ndarray:
+        self.last_T_in = T_in
+        best_cost = float("inf")
+        best_pair = (self.target_temp, 0.6)
+        for T_set in self._candidate_T:
+            for fan in self._candidate_fan:
+                cost = self._rollout_cost(
+                    T_in=T_in,
+                    T_out=T_out,
+                    IT_load=IT_load,
+                    T_set=T_set,
+                    fan_speed=fan,
+                )
+                if cost < best_cost:
+                    best_cost = cost
+                    best_pair = (T_set, fan)
+        T_cmd = np.full(self.num_crac, best_pair[0], dtype=np.float32)
+        fan_cmd = np.full(self.num_crac, best_pair[1], dtype=np.float32)
+        return self._normalize_action(T_cmd, fan_cmd)
+
+    def _rollout_cost(
         self,
         T_in: float,
         T_out: float,
-        H_in: float,
-        IT_load: float
-    ) -> np.ndarray:
+        IT_load: float,
+        T_set: float,
+        fan_speed: float,
+    ) -> float:
         """
-        MPC控制逻辑（简化）
-        
-        策略：
-        1. 预测未来温度趋势
-        2. 提前调整控制动作
-        3. 考虑能耗优化
+        使用一阶简化热模型预测未来温度
+
+        T_{t+1} = T_t + a*(T_out - T_t) + b*IT_load - c*(fan)*(target - T_set)
+        代价 = 温度偏差平方 + 能耗 proxy
         """
-        # 更新历史
-        self.T_history.append(T_in)
-        self.load_history.append(IT_load)
-        
-        # ========== 1. 预测温度趋势 ==========
-        if len(self.T_history) >= 3:
-            # 简单线性预测
-            dT_dt = (self.T_history[-1] - self.T_history[-3]) / 2.0
-            T_predicted = T_in + dT_dt * self.horizon
-        else:
-            T_predicted = T_in
-        
-        # ========== 2. 计算控制动作 ==========
-        error_current = T_in - self.target_temp
-        error_predicted = T_predicted - self.target_temp
-        
-        # 预测性调整：如果预测温度会超标，提前加大制冷
-        if error_predicted > 1.0:
-            # 预测会过热，提前降温
-            T_set = self.target_temp - 3.0
-            fan_speed = 0.9
-        elif error_predicted < -1.0:
-            # 预测会过冷，减少制冷
-            T_set = self.target_temp - 1.0
-            fan_speed = 0.4
-        else:
-            # 正常控制
-            T_set = self.target_temp - 2.0 - 0.5 * error_current
-            fan_speed = 0.6 + 0.1 * error_current
-        
-        # ========== 3. 能耗优化 ==========
-        # 利用室外温度优化
-        if T_out < self.target_temp - 3:
-            # 可以利用自然冷却
-            fan_speed *= 0.7
-            T_set += 1.0
-        
-        # 负载预测优化
-        if len(self.load_history) >= 3:
-            load_trend = self.load_history[-1] - self.load_history[-3]
-            if load_trend > 50:
-                # 负载上升趋势，提前增加制冷
-                fan_speed += 0.1
-        
-        # ========== 4. 构造动作 ==========
-        T_set = np.clip(T_set, self.T_set_min, self.T_set_max)
-        fan_speed = np.clip(fan_speed, self.fan_min, self.fan_max)
-        
-        T_set_array = np.ones(self.num_crac) * T_set
-        fan_array = np.ones(self.num_crac) * fan_speed
-        
-        # 归一化
-        action = self._normalize_action(T_set_array, fan_array)
-        
-        return action
-    
-    def _normalize_action(self, T_set: np.ndarray, fan_speed: np.ndarray) -> np.ndarray:
-        """归一化动作"""
-        T_set_norm = 2.0 * (T_set - self.T_set_min) / (self.T_set_max - self.T_set_min) - 1.0
-        fan_norm = 2.0 * (fan_speed - self.fan_min) / (self.fan_max - self.fan_min) - 1.0
-        
-        action = np.empty(2 * self.num_crac)
-        action[0::2] = T_set_norm
-        action[1::2] = fan_norm
-        
-        return action
+        a = 0.08
+        b = 0.0015
+        c = 0.15
+        temp = T_in
+        cost = 0.0
+        for _ in range(self.horizon):
+            delta = a * (T_out - temp) + b * (IT_load - 200.0) - c * fan_speed * (self.target_temp - T_set)
+            temp += delta
+            temp_error = temp - self.target_temp
+            energy_proxy = 0.5 * fan_speed + max(0.0, self.target_temp - T_set) * 0.05
+            cost += temp_error ** 2 + energy_proxy
+        return cost
 
 
-class RuleBasedController:
+class RuleBasedController(_BaseController):
     """
-    基于规则的控制器
-    
-    使用简单的if-else规则
-    适合作为baseline
+    手工规则控制
+
+    - 按温度偏差切换离散档位
+    - 根据负载和室外温度进行简单修正
     """
-    
-    def __init__(
-        self,
-        num_crac: int = 4,
-        target_temp: float = 24.0,
-    ):
-        self.num_crac = num_crac
-        self.target_temp = target_temp
-        
-        self.T_set_min = 18.0
-        self.T_set_max = 28.0
-        self.fan_min = 0.3
-        self.fan_max = 1.0
-    
-    def get_action(
-        self,
-        T_in: float,
-        T_out: float,
-        H_in: float,
-        IT_load: float
-    ) -> np.ndarray:
-        """
-        基于规则的控制
-        
-        规则：
-        1. 温度过高 → 降低设定温度，提高风速
-        2. 温度过低 → 提高设定温度，降低风速
-        3. 负载高 → 提高风速
-        4. 室外温度低 → 利用自然冷却
-        """
+
+    def __init__(self, num_crac: int = 4, target_temp: float = 24.0) -> None:
+        super().__init__(num_crac=num_crac, target_temp=target_temp)
+
+    def get_action(self, T_in: float, T_out: float, H_in: float, IT_load: float) -> np.ndarray:
         error = T_in - self.target_temp
-        
-        # ========== 规则1：温度控制 ==========
         if error > 2.0:
-            # 严重过热
-            T_set = 20.0
-            fan_speed = 1.0
+            T_set, fan = 20.0, 1.0
         elif error > 1.0:
-            # 轻微过热
-            T_set = 21.0
-            fan_speed = 0.8
+            T_set, fan = 21.0, 0.85
         elif error > 0.5:
-            # 接近目标
-            T_set = 22.0
-            fan_speed = 0.6
-        elif error > -0.5:
-            # 正常范围
-            T_set = 23.0
-            fan_speed = 0.5
+            T_set, fan = 22.0, 0.7
+        elif error < -1.0:
+            T_set, fan = 25.0, 0.4
         else:
-            # 过冷
-            T_set = 24.0
-            fan_speed = 0.3
-        
-        # ========== 规则2：负载调整 ==========
-        if IT_load > 300:
-            fan_speed = min(fan_speed + 0.2, 1.0)
-        elif IT_load < 150:
-            fan_speed = max(fan_speed - 0.1, 0.3)
-        
-        # ========== 规则3：自然冷却 ==========
-        if T_out < self.target_temp - 5:
-            # 室外很冷，可以节能
-            fan_speed *= 0.7
-            T_set += 1.0
-        
-        # ========== 构造动作 ==========
-        T_set = np.clip(T_set, self.T_set_min, self.T_set_max)
-        fan_speed = np.clip(fan_speed, self.fan_min, self.fan_max)
-        
-        T_set_array = np.ones(self.num_crac) * T_set
-        fan_array = np.ones(self.num_crac) * fan_speed
-        
-        # 归一化
-        action = self._normalize_action(T_set_array, fan_array)
-        
-        return action
-    
-    def _normalize_action(self, T_set: np.ndarray, fan_speed: np.ndarray) -> np.ndarray:
-        """归一化动作"""
-        T_set_norm = 2.0 * (T_set - self.T_set_min) / (self.T_set_max - self.T_set_min) - 1.0
-        fan_norm = 2.0 * (fan_speed - self.fan_min) / (self.fan_max - self.fan_min) - 1.0
-        
-        action = np.empty(2 * self.num_crac)
-        action[0::2] = T_set_norm
-        action[1::2] = fan_norm
-        
-        return action
+            T_set, fan = 23.5, 0.55
+
+        if IT_load > 320.0:
+            fan = min(fan + 0.1, self.fan_max)
+        elif IT_load < 150.0:
+            fan = max(fan - 0.1, self.fan_min)
+
+        if T_out < self.target_temp - 4.0:
+            fan *= 0.75
+            T_set += 0.5
+
+        T_cmd = np.full(self.num_crac, np.clip(T_set, self.T_set_min, self.T_set_max), dtype=np.float32)
+        fan_cmd = np.full(self.num_crac, np.clip(fan, self.fan_min, self.fan_max), dtype=np.float32)
+        return self._normalize_action(T_cmd, fan_cmd)
 
 
-# ========== 测试代码 ==========
-if __name__ == '__main__':
-    # 测试PID控制器
-    print("=" * 50)
-    print("测试PID控制器")
-    print("=" * 50)
-    
-    pid = PIDController(num_crac=4, target_temp=24.0)
-    
-    T_in = 26.0  # 初始温度过高
-    for step in range(10):
-        action = pid.get_action(T_in, 30.0, 50.0, 200.0)
-        print(f"Step {step}: T_in={T_in:.2f}°C, Action={action[:2]}")
-        
-        # 模拟温度下降
-        T_in -= 0.3
-    
-    print("\n" + "=" * 50)
-    print("测试MPC控制器")
-    print("=" * 50)
-    
-    mpc = MPCController(num_crac=4, target_temp=24.0)
-    
-    T_in = 24.0
-    for step in range(10):
-        action = mpc.get_action(T_in, 30.0, 50.0, 200.0 + step * 10)
-        print(f"Step {step}: T_in={T_in:.2f}°C, Load={200+step*10}kW")
-        
-        # 模拟温度变化
-        T_in += np.random.normal(0, 0.2)
-
+if __name__ == "__main__":
+    ctrl = ExpertController(controller_type="pid")
+    action = ctrl.get_action(T_in=26.0, T_out=30.0, H_in=50.0, IT_load=250.0)
+    print("PID action:", action[:4])
