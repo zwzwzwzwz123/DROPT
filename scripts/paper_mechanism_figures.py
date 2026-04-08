@@ -10,6 +10,7 @@ Outputs:
 
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 from dataclasses import dataclass
@@ -17,13 +18,19 @@ from typing import Dict, List, Sequence, Tuple
 
 import numpy as np
 
-
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
+from dropt_utils.paper_building_profiles import (
+    default_out_dir,
+    resolve_bcfixclean_officemedium_run_dirs,
+    resolve_bcfixclean_smalloffice_run_dirs,
+)
+
 LOG_ROOT = os.path.join(ROOT_DIR, "log_building")
 OUT_DIR = os.path.join(ROOT_DIR, "paperfigure")
+PROFILE = "legacy"
 WINDOW_START = 48
 WINDOW_END = 120
 REP_EPISODE = 0
@@ -76,7 +83,7 @@ def _save_figure(fig, out_basename: str) -> List[str]:
     return out_paths
 
 
-def _resolve_run_dirs(log_root: str) -> Dict[str, str]:
+def _resolve_legacy_run_dirs(log_root: str) -> Dict[str, str]:
     all_dirs = [name for name in os.listdir(log_root) if os.path.isdir(os.path.join(log_root, name))]
     resolved: Dict[str, str] = {}
     for name in all_dirs:
@@ -98,6 +105,15 @@ def _resolve_run_dirs(log_root: str) -> Dict[str, str]:
     if missing:
         raise FileNotFoundError(f"Missing run directories for: {missing}")
     return resolved
+
+
+def _resolve_run_dirs(log_root: str) -> Dict[str, str]:
+    required = [spec.matcher for spec in RUNS]
+    if PROFILE == "bcfixclean_smalloffice":
+        return resolve_bcfixclean_smalloffice_run_dirs(log_root, required)
+    if PROFILE == "bcfixclean_officemedium_partial":
+        return resolve_bcfixclean_officemedium_run_dirs(log_root, required, allow_partial=True)
+    return _resolve_legacy_run_dirs(log_root)
 
 
 def _load_npz(run_name: str, filename: str) -> np.lib.npyio.NpzFile:
@@ -127,6 +143,8 @@ def plot_q_vs_mc(run_map: Dict[str, str]) -> List[str]:
 
     _setup_matplotlib()
     spec = next(item for item in RUNS if item.label == "Guided-DiffFNO")
+    if spec.matcher not in run_map:
+        return []
     run_name = run_map[spec.matcher]
     data = _load_npz(run_name, "critic_q_vs_return.npz")
     q = np.asarray(data["q_values"], dtype=np.float64)
@@ -189,8 +207,12 @@ def plot_multizone_coordination(run_map: Dict[str, str]) -> List[str]:
         next(item for item in RUNS if item.label == "DiffFNO w/o Guidance"),
         next(item for item in RUNS if item.label == "Diffusion-MLP"),
     ]
+    selected = [spec for spec in selected if spec.matcher in run_map]
+    if not selected:
+        return []
 
-    fig, axes = plt.subplots(3, 1, figsize=(7.4, 7.7), sharex=True, sharey=True, constrained_layout=True)
+    fig, axes = plt.subplots(len(selected), 1, figsize=(7.4, 2.55 * len(selected)), sharex=True, sharey=True, constrained_layout=True)
+    axes = np.atleast_1d(axes)
     x = np.arange(WINDOW_END - WINDOW_START)
 
     for ax, spec in zip(axes, selected):
@@ -218,9 +240,8 @@ def plot_multizone_coordination(run_map: Dict[str, str]) -> List[str]:
         )
 
     axes[-1].set_xlabel("Hour")
-    axes[0].set_ylabel("Action")
-    axes[1].set_ylabel("Action")
-    axes[2].set_ylabel("Action")
+    for ax in axes:
+        ax.set_ylabel("Action")
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.01), ncol=3, frameon=False)
     fig.patch.set_facecolor("white")
@@ -229,7 +250,28 @@ def plot_multizone_coordination(run_map: Dict[str, str]) -> List[str]:
     return paths
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Generate publication-ready mechanism figures.")
+    parser.add_argument(
+        "--profile",
+        choices=["legacy", "bcfixclean_smalloffice", "bcfixclean_officemedium_partial"],
+        default="legacy",
+        help="Run-selection profile used to resolve log_building directories.",
+    )
+    parser.add_argument(
+        "--out-dir",
+        type=str,
+        default=None,
+        help="Output directory for the generated figures.",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
+    global OUT_DIR, PROFILE
+    args = _parse_args()
+    PROFILE = args.profile
+    OUT_DIR = args.out_dir or default_out_dir(ROOT_DIR, PROFILE)
     run_map = _resolve_run_dirs(LOG_ROOT)
     outputs: List[str] = []
     outputs.extend(plot_q_vs_mc(run_map))

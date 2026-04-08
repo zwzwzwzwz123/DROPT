@@ -10,6 +10,7 @@ exports both PNG and PDF into paperfigure/.
 
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 from dataclasses import dataclass
@@ -22,10 +23,16 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 from tensorboard.backend.event_processing import event_accumulator
+from dropt_utils.paper_building_profiles import (
+    default_out_dir,
+    resolve_bcfixclean_officemedium_run_dirs,
+    resolve_bcfixclean_smalloffice_run_dirs,
+)
 
 
 LOG_ROOT = os.path.join(ROOT_DIR, "log_building")
 OUT_DIR = os.path.join(ROOT_DIR, "paperfigure")
+PROFILE = "legacy"
 OUT_BASENAME_ENERGY = "compare_energy"
 OUT_BASENAME_VIOLATIONS = "compare_violations"
 OUT_BASENAME_PARETO = "compare_energy_violations"
@@ -83,7 +90,7 @@ def _mean_last_k(values: Iterable[Tuple[int, float]], k: int = SUMMARY_K) -> flo
     return float(np.mean(series[-kk:]))
 
 
-def _resolve_run_dirs(log_root: str) -> Dict[str, str]:
+def _resolve_legacy_run_dirs(log_root: str) -> Dict[str, str]:
     all_dirs = [name for name in os.listdir(log_root) if os.path.isdir(os.path.join(log_root, name))]
     resolved: Dict[str, str] = {}
 
@@ -122,10 +129,21 @@ def _resolve_run_dirs(log_root: str) -> Dict[str, str]:
     return resolved
 
 
+def _resolve_run_dirs(log_root: str) -> Dict[str, str]:
+    required = [spec.matcher for spec in RUN_SPECS]
+    if PROFILE == "bcfixclean_smalloffice":
+        return resolve_bcfixclean_smalloffice_run_dirs(log_root, required)
+    if PROFILE == "bcfixclean_officemedium_partial":
+        return resolve_bcfixclean_officemedium_run_dirs(log_root, required, allow_partial=True)
+    return _resolve_legacy_run_dirs(log_root)
+
+
 def _build_records(log_root: str) -> List[Dict[str, object]]:
     resolved = _resolve_run_dirs(log_root)
     records: List[Dict[str, object]] = []
     for spec in RUN_SPECS:
+        if spec.matcher not in resolved:
+            continue
         run_name = resolved[spec.matcher]
         run_dir = os.path.join(log_root, run_name)
         event_path = _event_file(run_dir)
@@ -447,6 +465,8 @@ def _render_pareto(records: Sequence[Dict[str, object]], out_dir: str, out_basen
 
 
 def render(records: Sequence[Dict[str, object]], out_dir: str) -> List[str]:
+    if not records:
+        return []
     out_paths: List[str] = []
     out_paths.extend(_render_pareto(records=records, out_dir=out_dir, out_basename=OUT_BASENAME_PARETO))
     out_paths.extend(
@@ -477,7 +497,28 @@ def render(records: Sequence[Dict[str, object]], out_dir: str) -> List[str]:
     return out_paths
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Generate publication-ready energy/violation comparison figures.")
+    parser.add_argument(
+        "--profile",
+        choices=["legacy", "bcfixclean_smalloffice", "bcfixclean_officemedium_partial"],
+        default="legacy",
+        help="Run-selection profile used to resolve log_building directories.",
+    )
+    parser.add_argument(
+        "--out-dir",
+        type=str,
+        default=None,
+        help="Output directory for the generated figures.",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
+    global OUT_DIR, PROFILE
+    args = _parse_args()
+    PROFILE = args.profile
+    OUT_DIR = args.out_dir or default_out_dir(ROOT_DIR, PROFILE)
     records = _build_records(LOG_ROOT)
     out_paths = render(records, OUT_DIR)
     for path in out_paths:

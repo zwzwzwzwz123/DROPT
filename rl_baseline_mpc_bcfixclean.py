@@ -236,7 +236,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-reward-normalization", dest="reward_normalization", action="store_false")
     parser.set_defaults(reward_normalization=True)
 
-    parser.add_argument("--bc-coef", action="store_true", default=False)
+    if hasattr(argparse, "BooleanOptionalAction"):
+        parser.add_argument(
+            "--bc-coef",
+            action=argparse.BooleanOptionalAction,
+            default=True,
+            help="Enable expert-imitation loss for the SAC+MPC baseline.",
+        )
+    else:
+        parser.add_argument("--bc-coef", action="store_true", default=True)
+        parser.add_argument("--no-bc-coef", dest="bc_coef", action="store_false")
     parser.add_argument("--bc-weight", type=float, default=0.8)
     parser.add_argument("--bc-weight-final", type=float, default=0.1)
     parser.add_argument("--bc-weight-decay-steps", type=int, default=150000)

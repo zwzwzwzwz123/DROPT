@@ -14,6 +14,7 @@ Figures:
 
 from __future__ import annotations
 
+import argparse
 import csv
 import os
 import sys
@@ -27,10 +28,16 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 from tensorboard.backend.event_processing import event_accumulator
+from dropt_utils.paper_building_profiles import (
+    default_out_dir,
+    resolve_bcfixclean_officemedium_run_dirs,
+    resolve_bcfixclean_smalloffice_run_dirs,
+)
 
 
 LOG_ROOT = os.path.join(ROOT_DIR, "log_building")
 OUT_DIR = os.path.join(ROOT_DIR, "paperfigure")
+PROFILE = "legacy"
 REWARD_SMOOTH = 7
 SUMMARY_K = 5
 ROOM_INDEX = 3
@@ -134,7 +141,7 @@ def _smooth(values: np.ndarray, window: int) -> np.ndarray:
     return np.convolve(values, kernel, mode="same")
 
 
-def _resolve_run_dirs(log_root: str) -> Dict[str, str]:
+def _resolve_legacy_run_dirs(log_root: str) -> Dict[str, str]:
     all_dirs = [name for name in os.listdir(log_root) if os.path.isdir(os.path.join(log_root, name))]
     resolved: Dict[str, str] = {}
 
@@ -173,6 +180,15 @@ def _resolve_run_dirs(log_root: str) -> Dict[str, str]:
     return resolved
 
 
+def _resolve_run_dirs(log_root: str) -> Dict[str, str]:
+    required = {spec.matcher for spec in ALL_METHODS} | {spec.matcher for spec in REWARD_ONLY_METHODS}
+    if PROFILE == "bcfixclean_smalloffice":
+        return resolve_bcfixclean_smalloffice_run_dirs(log_root, required)
+    if PROFILE == "bcfixclean_officemedium_partial":
+        return resolve_bcfixclean_officemedium_run_dirs(log_root, required, allow_partial=True)
+    return _resolve_legacy_run_dirs(log_root)
+
+
 def _run_dir_map() -> Dict[str, str]:
     return _resolve_run_dirs(LOG_ROOT)
 
@@ -188,8 +204,60 @@ def _load_npz(run_name: str, filename: str) -> np.lib.npyio.NpzFile:
     return np.load(path)
 
 
+def _load_or_compute_action_psd(run_name: str) -> Tuple[np.ndarray, np.ndarray]:
+    path = os.path.join(LOG_ROOT, run_name, "paper_data", "actions_welch_psd.npz")
+    if os.path.exists(path):
+        data = np.load(path)
+        return (
+            np.asarray(data["frequency_hz"], dtype=np.float64),
+            np.asarray(data["psd_mean"], dtype=np.float64),
+        )
+
+    traj = _load_npz(run_name, "trajectories.npz")
+    actions = np.asarray(traj["actions"], dtype=np.float64)
+    lengths = np.asarray(traj["lengths"], dtype=np.int32)
+    valid_lengths = [int(length) for length in lengths.tolist() if int(length) >= 8]
+    if not valid_lengths:
+        return np.zeros((0,), dtype=np.float64), np.zeros((0,), dtype=np.float64)
+
+    try:
+        from scipy.signal import welch  # type: ignore
+    except Exception as exc:  # pragma: no cover
+        raise RuntimeError("scipy is required to compute PSD from trajectories.npz") from exc
+
+    fs_hz = 1.0 / 3600.0
+    base_nperseg = min(64, min(valid_lengths))
+    psd_values: List[np.ndarray] = []
+    freq_hz: np.ndarray | None = None
+
+    for ep_idx, length in enumerate(lengths.tolist()):
+        length = int(length)
+        if length < 8:
+            continue
+        ep_actions = actions[ep_idx, :length]
+        for action_idx in range(ep_actions.shape[1]):
+            nperseg = min(base_nperseg, length)
+            noverlap = min(max(0, nperseg // 2), max(0, length - 1))
+            freq_hz_local, psd_local = welch(
+                ep_actions[:, action_idx],
+                fs=fs_hz,
+                window="hann",
+                nperseg=nperseg,
+                noverlap=noverlap,
+                detrend="constant",
+                scaling="density",
+            )
+            if freq_hz is None:
+                freq_hz = np.asarray(freq_hz_local, dtype=np.float64)
+            psd_values.append(np.asarray(psd_local, dtype=np.float64))
+
+    if freq_hz is None or not psd_values:
+        return np.zeros((0,), dtype=np.float64), np.zeros((0,), dtype=np.float64)
+    return freq_hz, np.mean(np.stack(psd_values, axis=0), axis=0)
+
+
 def _method_mapping_rows(run_map: Dict[str, str]) -> List[Tuple[str, str]]:
-    return [(spec.label, run_map[spec.matcher]) for spec in ALL_METHODS]
+    return [(spec.label, run_map[spec.matcher]) for spec in ALL_METHODS if spec.matcher in run_map]
 
 
 def export_mapping_csv(run_map: Dict[str, str]) -> str:
@@ -210,6 +278,8 @@ def plot_reward_curves(run_map: Dict[str, str]) -> List[str]:
 
     x_max = 0.0
     for spec in REWARD_ONLY_METHODS:
+        if spec.matcher not in run_map:
+            continue
         run_name = run_map[spec.matcher]
         event_path = _find_event_file(_run_path(run_name))
         series = _load_scalar_series(event_path, "test/reward")
@@ -261,6 +331,8 @@ def plot_action_smoothness(run_map: Dict[str, str]) -> List[str]:
     means: List[float] = []
 
     for spec in LEARNED_METHODS:
+        if spec.matcher not in run_map:
+            continue
         run_name = run_map[spec.matcher]
         traj = _load_npz(run_name, "trajectories.npz")
         dist = _action_delta_distribution(traj["actions"], traj["lengths"])
@@ -270,6 +342,10 @@ def plot_action_smoothness(run_map: Dict[str, str]) -> List[str]:
         data.append(dist)
         colors.append(spec.color)
         means.append(float(np.mean(dist)))
+
+    if not data:
+        plt.close(fig)
+        return []
 
     positions = np.arange(1, len(labels) + 1)
     box = ax.boxplot(
@@ -344,6 +420,8 @@ def plot_temperature_trajectories(run_map: Dict[str, str]) -> List[str]:
         "DiffFNO w/o Guidance": "--",
     }
     for spec in selected:
+        if spec.matcher not in run_map:
+            continue
         run_name = run_map[spec.matcher]
         temp = _windowed_room_series(run_name, "states", ROOM_INDEX, REP_EPISODE)
         ax.plot(
@@ -355,6 +433,9 @@ def plot_temperature_trajectories(run_map: Dict[str, str]) -> List[str]:
             label=spec.label,
         )
 
+    if not ax.lines or "fno_guided_full" not in run_map:
+        plt.close(fig)
+        return []
     lower, upper = _get_temperature_band(run_map["fno_guided_full"])
     ax.axhline(lower, color="#7f7f7f", linestyle="--", linewidth=1.0, label="Comfort band")
     ax.axhline(upper, color="#7f7f7f", linestyle="--", linewidth=1.0)
@@ -385,9 +466,15 @@ def plot_control_sequences(run_map: Dict[str, str]) -> List[str]:
     x = np.arange(WINDOW_END - WINDOW_START)
     for label in selected_labels:
         spec = next(item for item in ALL_METHODS if item.label == label)
+        if spec.matcher not in run_map:
+            continue
         run_name = run_map[spec.matcher]
         action = _windowed_room_series(run_name, "actions", ROOM_INDEX, REP_EPISODE)
         ax.plot(x, action, linewidth=2.0, color=spec.color, label=spec.label)
+
+    if not ax.lines:
+        plt.close(fig)
+        return []
 
     ax.set_xlabel("Hour")
     ax.set_ylabel(f"Action, room {ROOM_INDEX}")
@@ -413,7 +500,9 @@ def plot_temperature_trajectories_all(run_map: Dict[str, str]) -> List[str]:
     import matplotlib.pyplot as plt
 
     _setup_matplotlib()
-    methods = list(TRAJECTORY_METHODS)
+    methods = [spec for spec in TRAJECTORY_METHODS if spec.matcher in run_map]
+    if not methods or "fno_guided_full" not in run_map:
+        return []
     rows, cols = _panel_axes_count(len(methods))
     fig, axes = plt.subplots(rows, cols, figsize=(10.5, 2.6 * rows), sharex=True, sharey=True, constrained_layout=True)
     axes = np.atleast_1d(axes).reshape(rows, cols)
@@ -456,7 +545,9 @@ def plot_control_sequences_all(run_map: Dict[str, str]) -> List[str]:
     import matplotlib.pyplot as plt
 
     _setup_matplotlib()
-    methods = list(TRAJECTORY_METHODS)
+    methods = [spec for spec in TRAJECTORY_METHODS if spec.matcher in run_map]
+    if not methods:
+        return []
     rows, cols = _panel_axes_count(len(methods))
     fig, axes = plt.subplots(rows, cols, figsize=(10.5, 2.6 * rows), sharex=True, sharey=True, constrained_layout=True)
     axes = np.atleast_1d(axes).reshape(rows, cols)
@@ -496,11 +587,18 @@ def plot_action_psd(run_map: Dict[str, str]) -> List[str]:
     fig, ax = plt.subplots(figsize=(7.4, 4.8), constrained_layout=True)
 
     for spec in LEARNED_METHODS:
+        if spec.matcher not in run_map:
+            continue
         run_name = run_map[spec.matcher]
-        data = _load_npz(run_name, "actions_welch_psd.npz")
-        freq_cpd = np.asarray(data["frequency_hz"], dtype=np.float64) * 86400.0
-        psd = np.asarray(data["psd_mean"], dtype=np.float64)
+        freq_hz, psd = _load_or_compute_action_psd(run_name)
+        freq_cpd = freq_hz * 86400.0
+        if freq_cpd.size == 0 or psd.size == 0:
+            continue
         ax.plot(freq_cpd, psd, linewidth=2.0, color=spec.color, label=spec.label)
+
+    if not ax.lines:
+        plt.close(fig)
+        return []
 
     ax.set_xlabel("Frequency (cycles/day)")
     ax.set_ylabel("Welch PSD")
@@ -580,6 +678,8 @@ def plot_ablation_summary(run_map: Dict[str, str]) -> List[str]:
     import matplotlib.pyplot as plt
 
     _setup_matplotlib()
+    if any(spec.matcher not in run_map for spec in ABLATION_METHODS):
+        return []
     labels = [spec.label for spec in ABLATION_METHODS]
     run_names = [run_map[spec.matcher] for spec in ABLATION_METHODS]
 
@@ -631,7 +731,28 @@ def plot_ablation_summary(run_map: Dict[str, str]) -> List[str]:
     return paths
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Generate publication-ready building figure suite.")
+    parser.add_argument(
+        "--profile",
+        choices=["legacy", "bcfixclean_smalloffice", "bcfixclean_officemedium_partial"],
+        default="legacy",
+        help="Run-selection profile used to resolve log_building directories.",
+    )
+    parser.add_argument(
+        "--out-dir",
+        type=str,
+        default=None,
+        help="Output directory for the generated figures.",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
+    global OUT_DIR, PROFILE
+    args = _parse_args()
+    PROFILE = args.profile
+    OUT_DIR = args.out_dir or default_out_dir(ROOT_DIR, PROFILE)
     run_map = _run_dir_map()
     outputs: List[str] = []
     outputs.extend(plot_reward_curves(run_map))
