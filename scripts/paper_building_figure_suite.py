@@ -41,6 +41,8 @@ PROFILE = "legacy"
 REWARD_SMOOTH = 7
 SUMMARY_K = 5
 ROOM_INDEX = 3
+TEMP_ROOM_INDEX = ROOM_INDEX
+CONTROL_ROOM_INDEX = ROOM_INDEX
 WINDOW_START = 48
 WINDOW_END = 120
 REP_EPISODE = 0
@@ -423,7 +425,7 @@ def plot_temperature_trajectories(run_map: Dict[str, str]) -> List[str]:
         if spec.matcher not in run_map:
             continue
         run_name = run_map[spec.matcher]
-        temp = _windowed_room_series(run_name, "states", ROOM_INDEX, REP_EPISODE)
+        temp = _windowed_room_series(run_name, "states", TEMP_ROOM_INDEX, REP_EPISODE)
         ax.plot(
             x,
             temp,
@@ -440,7 +442,7 @@ def plot_temperature_trajectories(run_map: Dict[str, str]) -> List[str]:
     ax.axhline(lower, color="#7f7f7f", linestyle="--", linewidth=1.0, label="Comfort band")
     ax.axhline(upper, color="#7f7f7f", linestyle="--", linewidth=1.0)
     ax.set_xlabel("Hour")
-    ax.set_ylabel(f"Temperature, room {ROOM_INDEX} (°C)")
+    ax.set_ylabel(f"Temperature, room {TEMP_ROOM_INDEX} (°C)")
     ax.set_title("Representative temperature trajectory")
     ax.grid(True, linestyle="--", linewidth=0.6, alpha=0.35)
     ax.spines["top"].set_visible(False)
@@ -469,7 +471,7 @@ def plot_control_sequences(run_map: Dict[str, str]) -> List[str]:
         if spec.matcher not in run_map:
             continue
         run_name = run_map[spec.matcher]
-        action = _windowed_room_series(run_name, "actions", ROOM_INDEX, REP_EPISODE)
+        action = _windowed_room_series(run_name, "actions", CONTROL_ROOM_INDEX, REP_EPISODE)
         ax.plot(x, action, linewidth=2.0, color=spec.color, label=spec.label)
 
     if not ax.lines:
@@ -477,7 +479,7 @@ def plot_control_sequences(run_map: Dict[str, str]) -> List[str]:
         return []
 
     ax.set_xlabel("Hour")
-    ax.set_ylabel(f"Action, room {ROOM_INDEX}")
+    ax.set_ylabel(f"Action, room {CONTROL_ROOM_INDEX}")
     ax.set_ylim(-1.05, 1.05)
     ax.set_title("Representative control sequence")
     ax.grid(True, linestyle="--", linewidth=0.6, alpha=0.35)
@@ -514,7 +516,7 @@ def plot_temperature_trajectories_all(run_map: Dict[str, str]) -> List[str]:
     for idx, spec in enumerate(methods):
         ax = axes[idx // cols, idx % cols]
         run_name = run_map[spec.matcher]
-        temp = _windowed_room_series(run_name, "states", ROOM_INDEX, REP_EPISODE)
+        temp = _windowed_room_series(run_name, "states", TEMP_ROOM_INDEX, REP_EPISODE)
         ax.axhspan(lower, upper, color="#d9d9d9", alpha=0.22, zorder=0)
         ax.plot(x, temp, linewidth=2.0, color=spec.color)
         ax.axhline(lower, color="#8a8a8a", linestyle="--", linewidth=0.9)
@@ -533,7 +535,7 @@ def plot_temperature_trajectories_all(run_map: Dict[str, str]) -> List[str]:
             ax.set_xlabel("Hour")
     for ax in axes[:, 0]:
         if ax.has_data():
-            ax.set_ylabel(f"Temp., room {ROOM_INDEX} (°C)")
+            ax.set_ylabel(f"Temp., room {TEMP_ROOM_INDEX} (°C)")
 
     fig.suptitle("Representative temperature trajectories across methods", fontsize=13)
     paths = _save_figure(fig, "temperature_trajectories_all_models")
@@ -556,7 +558,7 @@ def plot_control_sequences_all(run_map: Dict[str, str]) -> List[str]:
     for idx, spec in enumerate(methods):
         ax = axes[idx // cols, idx % cols]
         run_name = run_map[spec.matcher]
-        action = _windowed_room_series(run_name, "actions", ROOM_INDEX, REP_EPISODE)
+        action = _windowed_room_series(run_name, "actions", CONTROL_ROOM_INDEX, REP_EPISODE)
         ax.plot(x, action, linewidth=2.0, color=spec.color)
         ax.set_title(spec.label, fontsize=10)
         ax.grid(True, linestyle="--", linewidth=0.55, alpha=0.30)
@@ -572,7 +574,7 @@ def plot_control_sequences_all(run_map: Dict[str, str]) -> List[str]:
             ax.set_xlabel("Hour")
     for ax in axes[:, 0]:
         if ax.has_data():
-            ax.set_ylabel(f"Action, room {ROOM_INDEX}")
+            ax.set_ylabel(f"Action, room {CONTROL_ROOM_INDEX}")
 
     fig.suptitle("Representative control sequences across methods", fontsize=13)
     paths = _save_figure(fig, "control_sequence_all_models")
@@ -745,14 +747,28 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Output directory for the generated figures.",
     )
+    parser.add_argument(
+        "--temp-room-index",
+        type=int,
+        default=ROOM_INDEX,
+        help="Room index used by temperature trajectory figures.",
+    )
+    parser.add_argument(
+        "--control-room-index",
+        type=int,
+        default=ROOM_INDEX,
+        help="Room index used by control-sequence figures.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
-    global OUT_DIR, PROFILE
+    global OUT_DIR, PROFILE, TEMP_ROOM_INDEX, CONTROL_ROOM_INDEX
     args = _parse_args()
     PROFILE = args.profile
     OUT_DIR = args.out_dir or default_out_dir(ROOT_DIR, PROFILE)
+    TEMP_ROOM_INDEX = args.temp_room_index
+    CONTROL_ROOM_INDEX = args.control_room_index
     run_map = _run_dir_map()
     outputs: List[str] = []
     outputs.extend(plot_reward_curves(run_map))
