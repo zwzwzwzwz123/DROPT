@@ -1,0 +1,16 @@
+{
+  "building_type": "OfficeSmall",
+  "weather_type": "Hot_Dry",
+  "location": "Tucson",
+  "episode_length": 168,
+  "time_resolution_s": 3600,
+  "low_freq_cpd": 2.0,
+  "low_freq_ratio": {
+    "physical_mpc": 0.9524555482934236,
+    "guided_difffno": 0.8874266482651061,
+    "diffusion_mlp": 0.7126759779748354
+  },
+  "guided_run_dir": "fno_guided_bcfix_clean_OfficeSmall_Hot_Dry_\u5c0f_guidancescale=0.5_100\u4e07\u6b65",
+  "mlp_run_dir": "diffusion_mlp_bcfix_clean_OfficeSmall_Hot_Dry_20260406_140006",
+  "notes": "HVAC power PSD comparison under the current bcfix-clean OfficeSmall setting."
+}
