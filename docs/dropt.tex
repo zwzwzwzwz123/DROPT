@@ -645,7 +645,7 @@ We report four primary metrics: average episode HVAC energy (kWh), average comfo
 
 \begin{table*}[t]
 \centering
-\caption{Overall comparison on the BEAR OfficeSmall-Hot\_Dry task. Energy is the average HVAC energy per episode. Violations denote the average thermal comfort violations. Reward is the final test reward averaged over the last five checkpoints. For the action smoothness metric, lower mean absolute action change indicates smoother control. The smoothness metric is reported for the learned controllers analyzed through logged action trajectories; it is therefore left unreported for MPC.}
+\caption{Overall comparison on the BEAR OfficeSmall-Hot\_Dry task. Energy is the average HVAC energy per episode. Violations denote the average thermal comfort violations. Reward is the final test reward averaged over the last five checkpoints. For the action smoothness metric, lower mean absolute action change indicates smoother control. For the learning-based methods, this metric is computed from the logged evaluation action trajectories. For MPC, we compute the same quantity from the closed-loop physical MPC action trajectory rolled out in the same bcfix-clean environment used for the PSD comparison.}
 \label{tab:overall_results}
 \setlength{\tabcolsep}{6pt}
 \renewcommand{\arraystretch}{1.12}
@@ -653,12 +653,12 @@ We report four primary metrics: average episode HVAC energy (kWh), average comfo
 \hline
 Method & Energy (kWh) $\downarrow$ & Violations $\downarrow$ & Test Reward $\uparrow$ & Mean $|\Delta a|$ $\downarrow$ \\
 \hline
-Guided-DiffFNO & 875.4 & \textbf{0.490} & \textbf{-0.484} & \textbf{0.0243} \\
+Guided-DiffFNO & 875.4 & \textbf{0.490} & \textbf{-0.484} & 0.0243 \\
 DiffFNO w/o Guidance & 928.1 & 0.864 & -0.736 & 0.0499 \\
 DiffFNO w/o Residual \& Guidance & 875.6 & 1.096 & -0.853 & 0.0437 \\
-DiffFNO w/o Residual & \textbf{869.1} & 0.679 & -0.599 & \textbf{0.0243} \\
+DiffFNO w/o Residual & \textbf{869.1} & 0.679 & -0.599 & 0.0243 \\
 Diffusion-MLP & 971.4 & 1.246 & -0.987 & 0.0716 \\
-MPC & 1004.9 & 1.780 & -1.325 & -- \\
+MPC & 1004.9 & 1.780 & -1.325 & \textbf{0.0130} \\
 SAC & 5942.8 & 5.543 & -5.071 & 0.4000 \\
 SAC+MPC & 1914.2 & 3.731 & -2.829 & 0.1893 \\
 \hline
@@ -717,7 +717,7 @@ This result should not be interpreted as perfect critic calibration; such a clai
 \hfill
 \subfloat[Welch power spectral density (PSD) of generated normalized action coordinates.\label{fig:action_psd_subfig}]{
 \includegraphics[width=0.47\textwidth]{\resultfigdir/action_psd_compare.pdf}}
-\caption{Action-quality analysis for the learned controllers. The left panel reports the primary smoothness metric used in Table~\ref{tab:overall_results}, while the right panel visualizes the frequency-domain distribution of generated control signals in normalized action coordinates.}
+\caption{Action-quality analysis for the learned controllers. The left panel reports the same smoothness metric as Table~\ref{tab:overall_results}, restricted here to the learned controllers, while the right panel visualizes the frequency-domain distribution of generated control signals in normalized action coordinates.}
 \label{fig:action_quality}
 \end{figure*}
 
@@ -748,7 +748,7 @@ This result should not be interpreted as perfect critic calibration; such a clai
 
 \subsection{Action Quality and Physical Consistency}
 
-Beyond scalar reward and energy metrics, the proposed method also produces smoother and more physically consistent control trajectories. As shown in Fig.~\ref{fig:action_quality}, Guided-DiffFNO is essentially tied with the no-residual guided variant for the lowest action-variation level among the evaluated learned controllers, with mean absolute action change $0.0243$. This is much lower than unguided DiffFNO ($0.0499$), Diffusion-MLP ($0.0716$), SAC+MPC ($0.1893$), and SAC ($0.4000$). Relative to Diffusion-MLP, the full model reduces average action variation by $66.0\%$, which is consistent with the view that the proposed structured generative policy suppresses control chatter in the joint action space.
+Beyond scalar reward and energy metrics, the proposed method also produces smoother and more physically consistent control trajectories. As shown in Fig.~\ref{fig:action_quality}, Guided-DiffFNO is essentially tied with the no-residual guided variant for the lowest action-variation level among the evaluated learned controllers, with mean absolute action change $0.0243$. This is much lower than unguided DiffFNO ($0.0499$), Diffusion-MLP ($0.0716$), SAC+MPC ($0.1893$), and SAC ($0.4000$). For reference, the physical MPC baseline is smoother still in Table~\ref{tab:overall_results}, with mean absolute action change $0.0130$, but it also consumes more energy and incurs substantially more comfort violations than Guided-DiffFNO. Relative to Diffusion-MLP, the full model reduces average action variation by $66.0\%$, which is consistent with the view that the proposed structured generative policy suppresses control chatter in the joint action space while retaining a more favorable overall energy--comfort balance than the physical MPC reference.
 
 Figure~\ref{fig:multizone_coordination} provides a useful visualization of the cross-zone coordination claim that motivates the FNO backbone. This figure is particularly important because the single-room trajectories in Fig.~\ref{fig:traj_control} alone could otherwise be interpreted as a representative but potentially cherry-picked local example. Over the same 72-hour window, the six zone actions generated by Guided-DiffFNO evolve in a highly synchronized manner, with mean pairwise inter-zone correlation $0.969$ and mean cross-zone standard deviation $0.015$. The high correlation should not be interpreted as the policy collapsing all zone commands to an identical scalar profile. Rather, it indicates that different zones respond coherently to the same global disturbances and operating rhythm, such as weather and daily load cycles, while still retaining nonzero zone-specific variation. This remaining differentiation is reflected by the nonzero cross-zone standard deviation, which stays at $0.015$ for Guided-DiffFNO and is substantially smaller than the $0.073$ observed for Diffusion-MLP.
 
