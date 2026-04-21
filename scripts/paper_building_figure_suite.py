@@ -45,17 +45,18 @@ AGGREGATE_SEEDS = False
 RUN_GROUPS: Dict[str, List[str]] = {}
 REWARD_SMOOTH = 7
 REWARD_LINEWIDTH = 1.15
+ACTION_PSD_LINEWIDTH = 1.3
 SUMMARY_K = 5
 ABLATION_CMAP_NAME = "academic_teal_blue"
 ABLATION_OUT_BASENAME = "ablation_summary_heatmap"
-BASE_FONT_SIZE = 11
-AXIS_FONT_SIZE = 12.5
-TITLE_FONT_SIZE = 12.5
-TICK_FONT_SIZE = 10.8
-LEGEND_FONT_SIZE = 10.2
-PANEL_TITLE_FONT_SIZE = 11.2
-SUPTITLE_FONT_SIZE = 14.2
-ANNOTATION_FONT_SIZE = 10.0
+BASE_FONT_SIZE = 13.5
+AXIS_FONT_SIZE = 15.5
+TITLE_FONT_SIZE = 15.5
+TICK_FONT_SIZE = 13.2
+LEGEND_FONT_SIZE = 12.8
+PANEL_TITLE_FONT_SIZE = 13.8
+SUPTITLE_FONT_SIZE = 17.2
+ANNOTATION_FONT_SIZE = 12.6
 ROOM_INDEX = 3
 TEMP_ROOM_INDEX = ROOM_INDEX
 CONTROL_ROOM_INDEX = 4
@@ -689,11 +690,11 @@ def plot_action_psd(run_map: Dict[str, str]) -> List[str]:
         freq_cpd = freq_hz * 86400.0
         if freq_cpd.size == 0 or psd.size == 0:
             continue
-        ax.plot(freq_cpd, psd, linewidth=2.0, color=spec.color, label=spec.label)
+        ax.plot(freq_cpd, psd, linewidth=ACTION_PSD_LINEWIDTH, color=spec.color, label=spec.label)
         if AGGREGATE_SEEDS and len(run_names) > 1:
             lower = np.clip(psd - psd_std, a_min=np.finfo(np.float64).tiny, a_max=None)
             upper = np.clip(psd + psd_std, a_min=np.finfo(np.float64).tiny, a_max=None)
-            ax.fill_between(freq_cpd, lower, upper, color=spec.color, alpha=0.12, linewidth=0.0)
+            ax.fill_between(freq_cpd, lower, upper, color=spec.color, alpha=0.14, linewidth=0.0)
 
     if not ax.lines:
         plt.close(fig)
@@ -836,10 +837,13 @@ def plot_ablation_summary(run_map: Dict[str, str]) -> List[str]:
         ]
     ).T
 
-    fig, ax = plt.subplots(figsize=(7.0, 4.2), constrained_layout=True)
+    fig, ax = plt.subplots(figsize=(8.6, 5.4), constrained_layout=True)
     im = ax.imshow(matrix, cmap=_resolve_ablation_cmap(ABLATION_CMAP_NAME), vmin=0.0, vmax=1.0, aspect="auto")
     ax.set_xticks(np.arange(4), ["Energy", "Comfort", "Smoothness", "Convergence"])
     ax.set_yticks(np.arange(len(labels)), labels)
+    ax.set_box_aspect(1.0)
+    ax.tick_params(axis="x", pad=8)
+    ax.tick_params(axis="y", pad=6)
 
     for i in range(matrix.shape[0]):
         for j in range(matrix.shape[1]):
@@ -856,8 +860,9 @@ def plot_ablation_summary(run_map: Dict[str, str]) -> List[str]:
                 fontsize=ANNOTATION_FONT_SIZE,
             )
 
-    cbar = fig.colorbar(im, ax=ax, shrink=0.9)
+    cbar = fig.colorbar(im, ax=ax, shrink=0.86)
     cbar.set_label("Normalized score")
+    cbar.ax.tick_params(labelsize=TICK_FONT_SIZE)
     fig.patch.set_facecolor("white")
     paths = _save_figure(fig, ABLATION_OUT_BASENAME)
     plt.close(fig)

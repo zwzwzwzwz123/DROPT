@@ -41,11 +41,12 @@ Three-seed aggregated figures:
 - compare_reward_curves.pdf/png
 - compare_action_smoothness.pdf/png
 - action_psd_compare.pdf/png
-- critic_q_mc_return.pdf/png
 - ablation_summary_heatmap.pdf/png
 - smalloffice_physical_psd_compare.pdf/png
+- critic_q_mc_return_multiseed.pdf/png
 
 Representative single-seed figures retained on a canonical seed:
+- critic_q_mc_return.pdf/png
 - temperature_trajectories_paper.pdf/png
 - control_sequence_paper.pdf/png
 - multizone_action_coordination.pdf/png
@@ -85,7 +86,17 @@ def main() -> None:
 
     _run([py, os.path.join(SCRIPT_DIR, "paper_compare_energy_violations.py"), *common, "--aggregate-seeds"])
     _run([py, os.path.join(SCRIPT_DIR, "paper_building_figure_suite.py"), *common, "--aggregate-seeds"])
-    _run([py, os.path.join(SCRIPT_DIR, "paper_mechanism_figures.py"), *common, "--aggregate-seeds"])
+    _run(
+        [
+            py,
+            os.path.join(SCRIPT_DIR, "paper_mechanism_figures.py"),
+            *common,
+            "--aggregate-seeds",
+            "--qmc-basename",
+            "critic_q_mc_return_multiseed",
+        ]
+    )
+    _run([py, os.path.join(SCRIPT_DIR, "paper_mechanism_figures.py"), *common, "--qmc-basename", "critic_q_mc_return"])
     _run([py, os.path.join(SCRIPT_DIR, "paper_physical_psd_compare.py"), "--out-dir", out_dir, "--aggregate-seeds"])
     _write_readme(out_dir)
     print(out_dir)

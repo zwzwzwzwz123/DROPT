@@ -40,13 +40,13 @@ OUT_BASENAME_ENERGY = "compare_energy"
 OUT_BASENAME_VIOLATIONS = "compare_violations"
 OUT_BASENAME_PARETO = "compare_energy_violations"
 SUMMARY_K = 5
-BASE_FONT_SIZE = 11
-AXIS_FONT_SIZE = 12.5
-TITLE_FONT_SIZE = 12.5
-TICK_FONT_SIZE = 10.8
-LEGEND_FONT_SIZE = 10.2
-ANNOTATION_FONT_SIZE = 10.0
-SMALL_ANNOTATION_FONT_SIZE = 9.7
+BASE_FONT_SIZE = 13.5
+AXIS_FONT_SIZE = 15.5
+TITLE_FONT_SIZE = 15.5
+TICK_FONT_SIZE = 13.2
+LEGEND_FONT_SIZE = 12.8
+ANNOTATION_FONT_SIZE = 12.6
+SMALL_ANNOTATION_FONT_SIZE = 11.8
 
 
 @dataclass(frozen=True)
@@ -282,17 +282,18 @@ def _render_single_metric(
     if metric_key == "energy":
         value_pad = max(60.0, (values + errors).max() * 0.12)
         x_extra = value_pad * 1.55
-        text_shift = value_pad * 0.12
+        text_shift = value_pad * 0.16
     else:
         value_pad = max(0.12, (values + errors).max() * 0.18)
-        x_extra = value_pad * 2.6
-        text_shift = value_pad * 0.22
+        x_extra = value_pad * 3.1
+        text_shift = value_pad * 0.34
 
     ax.set_xlim(0, float((values + errors).max()) + x_extra)
 
     for idx, value in enumerate(values):
+        err = errors[idx] if idx < len(errors) else 0.0
         ax.text(
-            value + text_shift,
+            value + err + text_shift,
             idx,
             format(value, value_fmt),
             va="center",
@@ -349,8 +350,8 @@ def _render_pareto(records: Sequence[Dict[str, object]], out_dir: str, out_basen
 
     os.makedirs(out_dir, exist_ok=True)
     _setup_matplotlib()
-    fig = plt.figure(figsize=(10.4, 6.8), constrained_layout=False)
-    gs = fig.add_gridspec(2, 3, width_ratios=[5.9, 1.7, 1.15], height_ratios=[1.25, 4.3], wspace=0.05, hspace=0.05)
+    fig = plt.figure(figsize=(9.6, 6.35), constrained_layout=False)
+    gs = fig.add_gridspec(2, 3, width_ratios=[6.1, 1.45, 0.98], height_ratios=[1.15, 4.15], wspace=0.035, hspace=0.045)
 
     ax_tl = fig.add_subplot(gs[0, 0])
     ax_tm = fig.add_subplot(gs[0, 1], sharey=ax_tl)
@@ -364,12 +365,12 @@ def _render_pareto(records: Sequence[Dict[str, object]], out_dir: str, out_basen
     all_axes = top_axes + bottom_axes
 
     x_segments = [
-        (842.0, 1086.0),
-        (1768.0, 1965.0),
-        (5932.0, 6018.0),
+        (844.0, 1068.0),
+        (1776.0, 1948.0),
+        (5948.0, 6010.0),
     ]
     y_bottom = (0.35, 2.05)
-    y_top = (3.0, 6.15)
+    y_top = (3.1, 5.75)
 
     frontier_mask = _pareto_mask(records)
     frontier_records = [row for row, keep in zip(records, frontier_mask.tolist()) if keep]
@@ -529,7 +530,7 @@ def _render_pareto(records: Sequence[Dict[str, object]], out_dir: str, out_basen
         columnspacing=1.4,
         handletextpad=0.5,
     )
-    fig.subplots_adjust(left=0.085, right=0.99, bottom=0.12, top=0.93)
+    fig.subplots_adjust(left=0.085, right=0.985, bottom=0.12, top=0.92)
 
     for ax_obj, (xmin, xmax) in zip(top_axes, x_segments):
         ax_obj.set_xlim(xmin, xmax)
@@ -554,7 +555,7 @@ def _render_pareto(records: Sequence[Dict[str, object]], out_dir: str, out_basen
     ax_tm.spines["right"].set_visible(False)
     ax_bm.spines["right"].set_visible(False)
 
-    ax_tl.set_yticks([3.0, 4.0, 5.0, 6.0])
+    ax_tl.set_yticks([3.5, 4.5, 5.5])
     ax_bl.set_yticks([0.5, 1.0, 1.5, 2.0])
     ax_bl.set_xticks([850, 900, 1000])
     ax_bm.set_xticks([1800, 1900])
