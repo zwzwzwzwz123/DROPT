@@ -30,19 +30,37 @@ if ROOT_DIR not in sys.path:
 from tensorboard.backend.event_processing import event_accumulator
 from dropt_utils.paper_building_profiles import (
     default_out_dir,
+    pick_run_dirs_by_seed_preference,
     resolve_bcfixclean_officemedium_run_dirs,
+    resolve_bcfixclean_officemedium_run_dir_groups,
     resolve_bcfixclean_smalloffice_run_dirs,
+    resolve_bcfixclean_smalloffice_run_dir_groups,
 )
 
 
 LOG_ROOT = os.path.join(ROOT_DIR, "log_building")
 OUT_DIR = os.path.join(ROOT_DIR, "paperfigure")
 PROFILE = "legacy"
+AGGREGATE_SEEDS = False
+RUN_GROUPS: Dict[str, List[str]] = {}
 REWARD_SMOOTH = 7
+REWARD_LINEWIDTH = 1.15
 SUMMARY_K = 5
+ABLATION_CMAP_NAME = "academic_teal_blue"
+ABLATION_OUT_BASENAME = "ablation_summary_heatmap"
+BASE_FONT_SIZE = 11
+AXIS_FONT_SIZE = 12.5
+TITLE_FONT_SIZE = 12.5
+TICK_FONT_SIZE = 10.8
+LEGEND_FONT_SIZE = 10.2
+PANEL_TITLE_FONT_SIZE = 11.2
+SUPTITLE_FONT_SIZE = 14.2
+ANNOTATION_FONT_SIZE = 10.0
 ROOM_INDEX = 3
 TEMP_ROOM_INDEX = ROOM_INDEX
-CONTROL_ROOM_INDEX = ROOM_INDEX
+CONTROL_ROOM_INDEX = 4
+DEFAULT_TEMP_ROOM_INDEX = TEMP_ROOM_INDEX
+DEFAULT_CONTROL_ROOM_INDEX = CONTROL_ROOM_INDEX
 WINDOW_START = 48
 WINDOW_END = 120
 REP_EPISODE = 0
@@ -89,13 +107,15 @@ def _setup_matplotlib() -> None:
         {
             "font.family": "serif",
             "font.serif": ["Times New Roman", "DejaVu Serif", "STIXGeneral"],
-            "font.size": 10,
-            "axes.labelsize": 11,
-            "axes.titlesize": 11,
+            "mathtext.fontset": "stix",
+            "mathtext.default": "regular",
+            "font.size": BASE_FONT_SIZE,
+            "axes.labelsize": AXIS_FONT_SIZE,
+            "axes.titlesize": TITLE_FONT_SIZE,
             "axes.linewidth": 0.8,
-            "xtick.labelsize": 9.5,
-            "ytick.labelsize": 10,
-            "legend.fontsize": 8.5,
+            "xtick.labelsize": TICK_FONT_SIZE,
+            "ytick.labelsize": TICK_FONT_SIZE,
+            "legend.fontsize": LEGEND_FONT_SIZE,
             "pdf.fonttype": 42,
             "ps.fonttype": 42,
         }
@@ -191,6 +211,15 @@ def _resolve_run_dirs(log_root: str) -> Dict[str, str]:
     return _resolve_legacy_run_dirs(log_root)
 
 
+def _resolve_run_groups(log_root: str) -> Dict[str, List[str]]:
+    required = {spec.matcher for spec in ALL_METHODS} | {spec.matcher for spec in REWARD_ONLY_METHODS}
+    if PROFILE == "bcfixclean_smalloffice":
+        return resolve_bcfixclean_smalloffice_run_dir_groups(log_root, required)
+    if PROFILE == "bcfixclean_officemedium_partial":
+        return resolve_bcfixclean_officemedium_run_dir_groups(log_root, required, allow_partial=True)
+    return {matcher: [name] for matcher, name in _resolve_legacy_run_dirs(log_root).items()}
+
+
 def _run_dir_map() -> Dict[str, str]:
     return _resolve_run_dirs(LOG_ROOT)
 
@@ -258,6 +287,57 @@ def _load_or_compute_action_psd(run_name: str) -> Tuple[np.ndarray, np.ndarray]:
     return freq_hz, np.mean(np.stack(psd_values, axis=0), axis=0)
 
 
+def _run_names_for(matcher: str, run_map: Dict[str, str]) -> List[str]:
+    if AGGREGATE_SEEDS and matcher in RUN_GROUPS:
+        return list(RUN_GROUPS[matcher])
+    if matcher in run_map:
+        return [run_map[matcher]]
+    return []
+
+
+def _aggregate_scalar_curves(run_names: Sequence[str], tag: str, smooth_window: int = 1) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    series_list: List[List[Tuple[int, float]]] = []
+    for run_name in run_names:
+        event_path = _find_event_file(_run_path(run_name))
+        series = _load_scalar_series(event_path, tag)
+        if not series:
+            continue
+        steps = np.asarray([step for step, _ in series], dtype=np.float64)
+        values = np.asarray([value for _, value in series], dtype=np.float64)
+        values = _smooth(values, smooth_window)
+        series_list.append(list(zip(steps.tolist(), values.tolist())))
+    if not series_list:
+        return np.zeros((0,), dtype=np.float64), np.zeros((0,), dtype=np.float64), np.zeros((0,), dtype=np.float64)
+
+    all_steps = sorted({int(step) for series in series_list for step, _ in series})
+    matrix = np.full((len(series_list), len(all_steps)), np.nan, dtype=np.float64)
+    step_to_idx = {step: idx for idx, step in enumerate(all_steps)}
+    for row_idx, series in enumerate(series_list):
+        for step, value in series:
+            matrix[row_idx, step_to_idx[int(step)]] = float(value)
+    mean = np.nanmean(matrix, axis=0)
+    std = np.nanstd(matrix, axis=0, ddof=0)
+    return np.asarray(all_steps, dtype=np.float64), mean, std
+
+
+def _aggregate_action_psd(run_names: Sequence[str]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    freq_ref: np.ndarray | None = None
+    psd_list: List[np.ndarray] = []
+    for run_name in run_names:
+        freq_hz, psd = _load_or_compute_action_psd(run_name)
+        if freq_hz.size == 0 or psd.size == 0:
+            continue
+        if freq_ref is None:
+            freq_ref = freq_hz
+        elif not np.array_equal(freq_ref, freq_hz):
+            raise RuntimeError(f"PSD frequency bins do not match across runs for {run_names}")
+        psd_list.append(psd)
+    if freq_ref is None or not psd_list:
+        return np.zeros((0,), dtype=np.float64), np.zeros((0,), dtype=np.float64), np.zeros((0,), dtype=np.float64)
+    stack = np.stack(psd_list, axis=0)
+    return freq_ref, np.mean(stack, axis=0), np.std(stack, axis=0, ddof=0)
+
+
 def _method_mapping_rows(run_map: Dict[str, str]) -> List[Tuple[str, str]]:
     return [(spec.label, run_map[spec.matcher]) for spec in ALL_METHODS if spec.matcher in run_map]
 
@@ -267,8 +347,21 @@ def export_mapping_csv(run_map: Dict[str, str]) -> str:
     out_path = os.path.join(OUT_DIR, "paper_method_mapping.csv")
     with open(out_path, "w", newline="", encoding="utf-8-sig") as fh:
         writer = csv.writer(fh)
-        writer.writerow(["Paper Name", "Source Log Directory"])
-        writer.writerows(_method_mapping_rows(run_map))
+        if AGGREGATE_SEEDS:
+            writer.writerow(["Paper Name", "Representative Log Directory", "Aggregated Log Directories"])
+            for spec in ALL_METHODS:
+                if spec.matcher not in run_map and spec.matcher not in RUN_GROUPS:
+                    continue
+                writer.writerow(
+                    [
+                        spec.label,
+                        run_map.get(spec.matcher, ""),
+                        " | ".join(RUN_GROUPS.get(spec.matcher, [])),
+                    ]
+                )
+        else:
+            writer.writerow(["Paper Name", "Source Log Directory"])
+            writer.writerows(_method_mapping_rows(run_map))
     return out_path
 
 
@@ -280,22 +373,20 @@ def plot_reward_curves(run_map: Dict[str, str]) -> List[str]:
 
     x_max = 0.0
     for spec in REWARD_ONLY_METHODS:
-        if spec.matcher not in run_map:
+        run_names = _run_names_for(spec.matcher, run_map)
+        if not run_names:
             continue
-        run_name = run_map[spec.matcher]
-        event_path = _find_event_file(_run_path(run_name))
-        series = _load_scalar_series(event_path, "test/reward")
-        if not series:
+        steps_raw, mean_values, std_values = _aggregate_scalar_curves(run_names, "test/reward", smooth_window=REWARD_SMOOTH)
+        if steps_raw.size == 0:
             continue
-        steps = np.asarray([step for step, _ in series], dtype=np.float64) / 1e6
-        values = np.asarray([value for _, value in series], dtype=np.float64)
-        values = _smooth(values, REWARD_SMOOTH)
-        ax.plot(steps, values, color=spec.color, linewidth=2.0, label=spec.label)
+        steps = steps_raw / 1e6
+        ax.plot(steps, mean_values, color=spec.color, linewidth=REWARD_LINEWIDTH, label=spec.label)
+        if AGGREGATE_SEEDS and len(run_names) > 1:
+            ax.fill_between(steps, mean_values - std_values, mean_values + std_values, color=spec.color, alpha=0.14, linewidth=0.0)
         x_max = max(x_max, float(np.max(steps)))
 
-    ax.set_xlabel("Training steps ($\\times 10^6$)")
+    ax.set_xlabel("Training steps (×10⁶)")
     ax.set_ylabel("Test reward")
-    ax.set_title("Reward curves")
     if x_max > 0:
         ax.set_xlim(0.0, x_max * 1.02)
     ax.grid(True, linestyle="--", linewidth=0.6, alpha=0.35)
@@ -333,11 +424,18 @@ def plot_action_smoothness(run_map: Dict[str, str]) -> List[str]:
     means: List[float] = []
 
     for spec in LEARNED_METHODS:
-        if spec.matcher not in run_map:
+        run_names = _run_names_for(spec.matcher, run_map)
+        if not run_names:
             continue
-        run_name = run_map[spec.matcher]
-        traj = _load_npz(run_name, "trajectories.npz")
-        dist = _action_delta_distribution(traj["actions"], traj["lengths"])
+        dists: List[np.ndarray] = []
+        for run_name in run_names:
+            traj = _load_npz(run_name, "trajectories.npz")
+            dist = _action_delta_distribution(traj["actions"], traj["lengths"])
+            if dist.size > 0:
+                dists.append(dist)
+        if not dists:
+            continue
+        dist = np.concatenate(dists, axis=0)
         if dist.size == 0:
             continue
         labels.append(spec.label)
@@ -369,7 +467,6 @@ def plot_action_smoothness(run_map: Dict[str, str]) -> List[str]:
     ax.scatter(means, positions, color="black", s=18, zorder=3, label="Mean")
     ax.set_yticks(positions, labels)
     ax.set_xlabel(r"Mean absolute action change, $|\Delta a|$")
-    ax.set_title("Action smoothness")
     ax.grid(axis="x", linestyle="--", linewidth=0.6, alpha=0.35)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -443,7 +540,6 @@ def plot_temperature_trajectories(run_map: Dict[str, str]) -> List[str]:
     ax.axhline(upper, color="#7f7f7f", linestyle="--", linewidth=1.0)
     ax.set_xlabel("Hour")
     ax.set_ylabel(f"Temperature, room {TEMP_ROOM_INDEX} (°C)")
-    ax.set_title("Representative temperature trajectory")
     ax.grid(True, linestyle="--", linewidth=0.6, alpha=0.35)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -481,7 +577,6 @@ def plot_control_sequences(run_map: Dict[str, str]) -> List[str]:
     ax.set_xlabel("Hour")
     ax.set_ylabel(f"Action, room {CONTROL_ROOM_INDEX}")
     ax.set_ylim(-1.05, 1.05)
-    ax.set_title("Representative control sequence")
     ax.grid(True, linestyle="--", linewidth=0.6, alpha=0.35)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -521,7 +616,7 @@ def plot_temperature_trajectories_all(run_map: Dict[str, str]) -> List[str]:
         ax.plot(x, temp, linewidth=2.0, color=spec.color)
         ax.axhline(lower, color="#8a8a8a", linestyle="--", linewidth=0.9)
         ax.axhline(upper, color="#8a8a8a", linestyle="--", linewidth=0.9)
-        ax.set_title(spec.label, fontsize=10)
+        ax.set_title(spec.label, fontsize=PANEL_TITLE_FONT_SIZE)
         ax.grid(True, linestyle="--", linewidth=0.55, alpha=0.30)
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
@@ -537,7 +632,6 @@ def plot_temperature_trajectories_all(run_map: Dict[str, str]) -> List[str]:
         if ax.has_data():
             ax.set_ylabel(f"Temp., room {TEMP_ROOM_INDEX} (°C)")
 
-    fig.suptitle("Representative temperature trajectories across methods", fontsize=13)
     paths = _save_figure(fig, "temperature_trajectories_all_models")
     plt.close(fig)
     return paths
@@ -560,7 +654,7 @@ def plot_control_sequences_all(run_map: Dict[str, str]) -> List[str]:
         run_name = run_map[spec.matcher]
         action = _windowed_room_series(run_name, "actions", CONTROL_ROOM_INDEX, REP_EPISODE)
         ax.plot(x, action, linewidth=2.0, color=spec.color)
-        ax.set_title(spec.label, fontsize=10)
+        ax.set_title(spec.label, fontsize=PANEL_TITLE_FONT_SIZE)
         ax.grid(True, linestyle="--", linewidth=0.55, alpha=0.30)
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
@@ -576,7 +670,6 @@ def plot_control_sequences_all(run_map: Dict[str, str]) -> List[str]:
         if ax.has_data():
             ax.set_ylabel(f"Action, room {CONTROL_ROOM_INDEX}")
 
-    fig.suptitle("Representative control sequences across methods", fontsize=13)
     paths = _save_figure(fig, "control_sequence_all_models")
     plt.close(fig)
     return paths
@@ -589,14 +682,18 @@ def plot_action_psd(run_map: Dict[str, str]) -> List[str]:
     fig, ax = plt.subplots(figsize=(7.4, 4.8), constrained_layout=True)
 
     for spec in LEARNED_METHODS:
-        if spec.matcher not in run_map:
+        run_names = _run_names_for(spec.matcher, run_map)
+        if not run_names:
             continue
-        run_name = run_map[spec.matcher]
-        freq_hz, psd = _load_or_compute_action_psd(run_name)
+        freq_hz, psd, psd_std = _aggregate_action_psd(run_names)
         freq_cpd = freq_hz * 86400.0
         if freq_cpd.size == 0 or psd.size == 0:
             continue
         ax.plot(freq_cpd, psd, linewidth=2.0, color=spec.color, label=spec.label)
+        if AGGREGATE_SEEDS and len(run_names) > 1:
+            lower = np.clip(psd - psd_std, a_min=np.finfo(np.float64).tiny, a_max=None)
+            upper = np.clip(psd + psd_std, a_min=np.finfo(np.float64).tiny, a_max=None)
+            ax.fill_between(freq_cpd, lower, upper, color=spec.color, alpha=0.12, linewidth=0.0)
 
     if not ax.lines:
         plt.close(fig)
@@ -605,7 +702,6 @@ def plot_action_psd(run_map: Dict[str, str]) -> List[str]:
     ax.set_xlabel("Frequency (cycles/day)")
     ax.set_ylabel("Welch PSD")
     ax.set_yscale("log")
-    ax.set_title("Action frequency spectrum")
     ax.grid(True, which="both", linestyle="--", linewidth=0.55, alpha=0.3)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -676,6 +772,30 @@ def _minmax(values: Sequence[float], higher_is_better: bool = True) -> np.ndarra
     return (arr - vmin) / (vmax - vmin)
 
 
+def _resolve_ablation_cmap(name: str):
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import LinearSegmentedColormap
+
+    key = str(name).strip().lower()
+    if key == "academic_teal_blue":
+        return LinearSegmentedColormap.from_list(
+            "academic_teal_blue",
+            ["#f8fbff", "#d8eaf4", "#94c7cf", "#3d8ca3", "#173b67"],
+        )
+    if key == "dopamine":
+        return LinearSegmentedColormap.from_list(
+            "dopamine",
+            ["#fff7db", "#ffd166", "#06d6a0", "#118ab2", "#073b4c"],
+        )
+    if key == "ylgnbu":
+        return plt.get_cmap("YlGnBu")
+    if key == "viridis":
+        return plt.get_cmap("viridis")
+    if key == "turbo":
+        return plt.get_cmap("turbo")
+    return plt.get_cmap(name)
+
+
 def plot_ablation_summary(run_map: Dict[str, str]) -> List[str]:
     import matplotlib.pyplot as plt
 
@@ -683,19 +803,29 @@ def plot_ablation_summary(run_map: Dict[str, str]) -> List[str]:
     if any(spec.matcher not in run_map for spec in ABLATION_METHODS):
         return []
     labels = [spec.label for spec in ABLATION_METHODS]
-    run_names = [run_map[spec.matcher] for spec in ABLATION_METHODS]
 
     energies = []
     comfort = []
     smoothness = []
     convergence = []
-    for run_name in run_names:
-        event_path = _find_event_file(_run_path(run_name))
-        energy = _mean_last_k(_load_scalar_series(event_path, "test/avg_energy"))
-        energies.append(energy)
-        comfort.append(_comfort_rate(run_name))
-        smoothness.append(_action_mse(run_name))
-        convergence.append(_convergence_auc(run_name))
+    for spec in ABLATION_METHODS:
+        run_names = _run_names_for(spec.matcher, run_map)
+        if not run_names:
+            return []
+        energy_vals = []
+        comfort_vals = []
+        smoothness_vals = []
+        convergence_vals = []
+        for run_name in run_names:
+            event_path = _find_event_file(_run_path(run_name))
+            energy_vals.append(_mean_last_k(_load_scalar_series(event_path, "test/avg_energy")))
+            comfort_vals.append(_comfort_rate(run_name))
+            smoothness_vals.append(_action_mse(run_name))
+            convergence_vals.append(_convergence_auc(run_name))
+        energies.append(float(np.nanmean(np.asarray(energy_vals, dtype=np.float64))))
+        comfort.append(float(np.nanmean(np.asarray(comfort_vals, dtype=np.float64))))
+        smoothness.append(float(np.nanmean(np.asarray(smoothness_vals, dtype=np.float64))))
+        convergence.append(float(np.nanmean(np.asarray(convergence_vals, dtype=np.float64))))
 
     matrix = np.vstack(
         [
@@ -707,28 +837,29 @@ def plot_ablation_summary(run_map: Dict[str, str]) -> List[str]:
     ).T
 
     fig, ax = plt.subplots(figsize=(7.0, 4.2), constrained_layout=True)
-    im = ax.imshow(matrix, cmap="Blues", vmin=0.0, vmax=1.0, aspect="auto")
+    im = ax.imshow(matrix, cmap=_resolve_ablation_cmap(ABLATION_CMAP_NAME), vmin=0.0, vmax=1.0, aspect="auto")
     ax.set_xticks(np.arange(4), ["Energy", "Comfort", "Smoothness", "Convergence"])
     ax.set_yticks(np.arange(len(labels)), labels)
-    ax.set_title("Ablation summary (normalized, higher is better)")
 
     for i in range(matrix.shape[0]):
         for j in range(matrix.shape[1]):
             val = matrix[i, j]
+            r, g, b, _ = im.cmap(val)
+            luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
             ax.text(
                 j,
                 i,
                 f"{val:.2f}",
                 ha="center",
                 va="center",
-                color="white" if val > 0.55 else "#1f2937",
-                fontsize=9,
+                color="white" if luminance < 0.52 else "#0f172a",
+                fontsize=ANNOTATION_FONT_SIZE,
             )
 
     cbar = fig.colorbar(im, ax=ax, shrink=0.9)
     cbar.set_label("Normalized score")
     fig.patch.set_facecolor("white")
-    paths = _save_figure(fig, "ablation_summary_heatmap")
+    paths = _save_figure(fig, ABLATION_OUT_BASENAME)
     plt.close(fig)
     return paths
 
@@ -750,26 +881,51 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--temp-room-index",
         type=int,
-        default=ROOM_INDEX,
+        default=DEFAULT_TEMP_ROOM_INDEX,
         help="Room index used by temperature trajectory figures.",
     )
     parser.add_argument(
         "--control-room-index",
         type=int,
-        default=ROOM_INDEX,
+        default=DEFAULT_CONTROL_ROOM_INDEX,
         help="Room index used by control-sequence figures.",
+    )
+    parser.add_argument(
+        "--aggregate-seeds",
+        action="store_true",
+        help="Aggregate matched runs across seeds for statistical figures while keeping representative trajectories on a canonical seed.",
+    )
+    parser.add_argument(
+        "--ablation-cmap",
+        type=str,
+        default="academic_teal_blue",
+        help="Colormap used by the ablation heatmap. Examples: viridis, YlGnBu, dopamine, turbo.",
+    )
+    parser.add_argument(
+        "--ablation-out-basename",
+        type=str,
+        default="ablation_summary_heatmap",
+        help="Output basename for the ablation heatmap.",
     )
     return parser.parse_args()
 
 
 def main() -> None:
-    global OUT_DIR, PROFILE, TEMP_ROOM_INDEX, CONTROL_ROOM_INDEX
+    global OUT_DIR, PROFILE, TEMP_ROOM_INDEX, CONTROL_ROOM_INDEX, AGGREGATE_SEEDS, RUN_GROUPS, ABLATION_CMAP_NAME, ABLATION_OUT_BASENAME
     args = _parse_args()
     PROFILE = args.profile
     OUT_DIR = args.out_dir or default_out_dir(ROOT_DIR, PROFILE)
     TEMP_ROOM_INDEX = args.temp_room_index
     CONTROL_ROOM_INDEX = args.control_room_index
-    run_map = _run_dir_map()
+    AGGREGATE_SEEDS = bool(args.aggregate_seeds)
+    ABLATION_CMAP_NAME = str(args.ablation_cmap)
+    ABLATION_OUT_BASENAME = str(args.ablation_out_basename)
+    if AGGREGATE_SEEDS:
+        RUN_GROUPS = _resolve_run_groups(LOG_ROOT)
+        run_map = pick_run_dirs_by_seed_preference(LOG_ROOT, RUN_GROUPS)
+    else:
+        RUN_GROUPS = {}
+        run_map = _run_dir_map()
     outputs: List[str] = []
     outputs.extend(plot_reward_curves(run_map))
     outputs.extend(plot_action_smoothness(run_map))

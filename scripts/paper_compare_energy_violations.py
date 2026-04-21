@@ -26,17 +26,27 @@ from tensorboard.backend.event_processing import event_accumulator
 from dropt_utils.paper_building_profiles import (
     default_out_dir,
     resolve_bcfixclean_officemedium_run_dirs,
+    resolve_bcfixclean_officemedium_run_dir_groups,
     resolve_bcfixclean_smalloffice_run_dirs,
+    resolve_bcfixclean_smalloffice_run_dir_groups,
 )
 
 
 LOG_ROOT = os.path.join(ROOT_DIR, "log_building")
 OUT_DIR = os.path.join(ROOT_DIR, "paperfigure")
 PROFILE = "legacy"
+AGGREGATE_SEEDS = False
 OUT_BASENAME_ENERGY = "compare_energy"
 OUT_BASENAME_VIOLATIONS = "compare_violations"
 OUT_BASENAME_PARETO = "compare_energy_violations"
 SUMMARY_K = 5
+BASE_FONT_SIZE = 11
+AXIS_FONT_SIZE = 12.5
+TITLE_FONT_SIZE = 12.5
+TICK_FONT_SIZE = 10.8
+LEGEND_FONT_SIZE = 10.2
+ANNOTATION_FONT_SIZE = 10.0
+SMALL_ANNOTATION_FONT_SIZE = 9.7
 
 
 @dataclass(frozen=True)
@@ -138,23 +148,45 @@ def _resolve_run_dirs(log_root: str) -> Dict[str, str]:
     return _resolve_legacy_run_dirs(log_root)
 
 
+def _resolve_run_groups(log_root: str) -> Dict[str, List[str]]:
+    required = [spec.matcher for spec in RUN_SPECS]
+    if PROFILE == "bcfixclean_smalloffice":
+        return resolve_bcfixclean_smalloffice_run_dir_groups(log_root, required)
+    if PROFILE == "bcfixclean_officemedium_partial":
+        return resolve_bcfixclean_officemedium_run_dir_groups(log_root, required, allow_partial=True)
+    return {matcher: [name] for matcher, name in _resolve_legacy_run_dirs(log_root).items()}
+
+
 def _build_records(log_root: str) -> List[Dict[str, object]]:
-    resolved = _resolve_run_dirs(log_root)
+    if AGGREGATE_SEEDS:
+        resolved_groups = _resolve_run_groups(log_root)
+    else:
+        resolved_single = _resolve_run_dirs(log_root)
+        resolved_groups = {matcher: [name] for matcher, name in resolved_single.items()}
     records: List[Dict[str, object]] = []
     for spec in RUN_SPECS:
-        if spec.matcher not in resolved:
+        run_names = resolved_groups.get(spec.matcher, [])
+        if not run_names:
             continue
-        run_name = resolved[spec.matcher]
-        run_dir = os.path.join(log_root, run_name)
-        event_path = _event_file(run_dir)
-        energy = _mean_last_k(_load_series(event_path, "test/avg_energy"))
-        violations = _mean_last_k(_load_series(event_path, "test/avg_violations"))
+        energies: List[float] = []
+        violations_list: List[float] = []
+        for run_name in run_names:
+            run_dir = os.path.join(log_root, run_name)
+            event_path = _event_file(run_dir)
+            energies.append(_mean_last_k(_load_series(event_path, "test/avg_energy")))
+            violations_list.append(_mean_last_k(_load_series(event_path, "test/avg_violations")))
+        energy_arr = np.asarray(energies, dtype=np.float64)
+        violations_arr = np.asarray(violations_list, dtype=np.float64)
         records.append(
             {
                 "label": spec.label,
-                "run_name": run_name,
-                "energy": energy,
-                "violations": violations,
+                "run_name": " | ".join(run_names),
+                "run_names": run_names,
+                "energy": float(np.nanmean(energy_arr)),
+                "energy_std": float(np.nanstd(energy_arr, ddof=0)),
+                "violations": float(np.nanmean(violations_arr)),
+                "violations_std": float(np.nanstd(violations_arr, ddof=0)),
+                "n_runs": len(run_names),
                 "color": spec.color,
                 "kind": spec.kind,
             }
@@ -163,10 +195,22 @@ def _build_records(log_root: str) -> List[Dict[str, object]]:
 
 
 def _save_mapping_csv(records: Sequence[Dict[str, object]], out_dir: str) -> None:
-    lines = ["Paper Name,Source Log Directory,Energy_kWh,Comfort Violations"]
+    lines = [
+        "Paper Name,Source Log Directories,Num Runs,Energy Mean kWh,Energy Std,Comfort Violations Mean,Comfort Violations Std"
+    ]
     for row in records:
         lines.append(
-            f"{row['label']},{row['run_name']},{float(row['energy']):.6f},{float(row['violations']):.6f}"
+            ",".join(
+                [
+                    str(row["label"]),
+                    '"' + str(row["run_name"]).replace('"', '""') + '"',
+                    str(int(row.get("n_runs", 1))),
+                    f"{float(row['energy']):.6f}",
+                    f"{float(row.get('energy_std', 0.0)):.6f}",
+                    f"{float(row['violations']):.6f}",
+                    f"{float(row.get('violations_std', 0.0)):.6f}",
+                ]
+            )
         )
     with open(os.path.join(out_dir, "compare_energy_violations_mapping.csv"), "w", encoding="utf-8-sig") as fh:
         fh.write("\n".join(lines) + "\n")
@@ -179,13 +223,15 @@ def _setup_matplotlib() -> None:
         {
             "font.family": "serif",
             "font.serif": ["Times New Roman", "DejaVu Serif", "STIXGeneral"],
-            "font.size": 10,
-            "axes.labelsize": 11,
-            "axes.titlesize": 11,
+            "mathtext.fontset": "stix",
+            "mathtext.default": "regular",
+            "font.size": BASE_FONT_SIZE,
+            "axes.labelsize": AXIS_FONT_SIZE,
+            "axes.titlesize": TITLE_FONT_SIZE,
             "axes.linewidth": 0.8,
-            "xtick.labelsize": 9.5,
-            "ytick.labelsize": 10,
-            "legend.fontsize": 9,
+            "xtick.labelsize": TICK_FONT_SIZE,
+            "ytick.labelsize": TICK_FONT_SIZE,
+            "legend.fontsize": LEGEND_FONT_SIZE,
             "pdf.fonttype": 42,
             "ps.fonttype": 42,
         }
@@ -216,30 +262,33 @@ def _render_single_metric(
     colors = [str(row["color"]) for row in ordered_records]
     y = np.arange(len(labels))
     values = np.asarray([float(row[metric_key]) for row in ordered_records], dtype=np.float64)
+    std_key = f"{metric_key}_std"
+    errors = np.asarray([float(row.get(std_key, 0.0)) for row in ordered_records], dtype=np.float64)
 
     fig, ax = plt.subplots(figsize=(7.2, 4.8), constrained_layout=True)
 
     bar_kw = dict(height=0.68, edgecolor="black", linewidth=0.5, alpha=0.96)
     ax.barh(y, values, color=colors, **bar_kw)
+    if np.any(errors > 0):
+        ax.errorbar(values, y, xerr=errors, fmt="none", ecolor="#374151", elinewidth=1.0, capsize=3.0, zorder=3)
     ax.grid(axis="x", linestyle="--", linewidth=0.6, alpha=0.35)
     ax.set_axisbelow(True)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.set_yticks(y, labels)
     ax.set_xlabel(xlabel)
-    ax.set_title(title)
     ax.xaxis.set_major_formatter(StrMethodFormatter(tick_fmt))
 
     if metric_key == "energy":
-        value_pad = max(60.0, values.max() * 0.12)
+        value_pad = max(60.0, (values + errors).max() * 0.12)
         x_extra = value_pad * 1.55
         text_shift = value_pad * 0.12
     else:
-        value_pad = max(0.12, values.max() * 0.18)
+        value_pad = max(0.12, (values + errors).max() * 0.18)
         x_extra = value_pad * 2.6
         text_shift = value_pad * 0.22
 
-    ax.set_xlim(0, values.max() + x_extra)
+    ax.set_xlim(0, float((values + errors).max()) + x_extra)
 
     for idx, value in enumerate(values):
         ax.text(
@@ -248,7 +297,7 @@ def _render_single_metric(
             format(value, value_fmt),
             va="center",
             ha="left",
-            fontsize=9,
+            fontsize=ANNOTATION_FONT_SIZE,
             color="#222222",
         )
 
@@ -300,32 +349,79 @@ def _render_pareto(records: Sequence[Dict[str, object]], out_dir: str, out_basen
 
     os.makedirs(out_dir, exist_ok=True)
     _setup_matplotlib()
+    fig = plt.figure(figsize=(10.4, 6.8), constrained_layout=False)
+    gs = fig.add_gridspec(2, 3, width_ratios=[5.9, 1.7, 1.15], height_ratios=[1.25, 4.3], wspace=0.05, hspace=0.05)
 
-    excluded_labels = {"SAC", "SAC+MPC"}
-    plot_records = [row for row in records if str(row["label"]) not in excluded_labels]
-    sac_record = next((row for row in records if str(row["label"]) == "SAC"), None)
-    sac_mpc_record = next((row for row in records if str(row["label"]) == "SAC+MPC"), None)
+    ax_tl = fig.add_subplot(gs[0, 0])
+    ax_tm = fig.add_subplot(gs[0, 1], sharey=ax_tl)
+    ax_tr = fig.add_subplot(gs[0, 2], sharey=ax_tl)
+    ax_bl = fig.add_subplot(gs[1, 0], sharex=ax_tl)
+    ax_bm = fig.add_subplot(gs[1, 1], sharex=ax_tm, sharey=ax_bl)
+    ax_br = fig.add_subplot(gs[1, 2], sharex=ax_tr, sharey=ax_bl)
 
-    fig, ax = plt.subplots(figsize=(7.0, 5.2), constrained_layout=True)
+    top_axes = [ax_tl, ax_tm, ax_tr]
+    bottom_axes = [ax_bl, ax_bm, ax_br]
+    all_axes = top_axes + bottom_axes
 
-    frontier_mask = _pareto_mask(plot_records)
-    frontier_records = [row for row, keep in zip(plot_records, frontier_mask.tolist()) if keep]
+    x_segments = [
+        (842.0, 1086.0),
+        (1768.0, 1965.0),
+        (5932.0, 6018.0),
+    ]
+    y_bottom = (0.35, 2.05)
+    y_top = (3.0, 6.15)
+
+    frontier_mask = _pareto_mask(records)
+    frontier_records = [row for row, keep in zip(records, frontier_mask.tolist()) if keep]
     frontier_records = sorted(frontier_records, key=lambda r: float(r["energy"]))
-
     marker_by_kind = {"diffusion": "o", "baseline": "s"}
 
-    def _draw_points(ax_obj, annotate: bool) -> None:
-        for row, is_frontier in zip(plot_records, frontier_mask.tolist()):
+    def _axes_for_point(energy: float, violations: float):
+        x_idx = None
+        for idx, (xmin, xmax) in enumerate(x_segments):
+            if xmin <= energy <= xmax:
+                x_idx = idx
+                break
+        if x_idx is None:
+            return None
+        if y_bottom[0] <= violations <= y_bottom[1]:
+            return bottom_axes[x_idx]
+        if y_top[0] <= violations <= y_top[1]:
+            return top_axes[x_idx]
+        return None
+
+    def _draw_points() -> None:
+        offsets = {
+            "Guided-DiffFNO": (31.0, -0.11),
+            "DiffFNO w/o Guidance": (22.0, 0.03),
+            "DiffFNO w/o Residual & Guidance": (16.0, 0.18),
+            "DiffFNO w/o Residual": (18.0, 0.08),
+            "Diffusion Policy (MLP backbone)": (12.0, 0.08),
+            "MPC": (8.0, 0.11),
+            "SAC+MPC": (16.0, 0.22),
+            "SAC": (-16.0, 0.20),
+        }
+        arrow_labels = {"Guided-DiffFNO", "DiffFNO w/o Residual", "SAC+MPC"}
+
+        for row, is_frontier in zip(records, frontier_mask.tolist()):
             energy = float(row["energy"])
             violations = float(row["violations"])
+            energy_std = float(row.get("energy_std", 0.0))
+            violations_std = float(row.get("violations_std", 0.0))
             label = str(row["label"])
             color = str(row["color"])
             kind = str(row["kind"])
             marker = marker_by_kind.get(kind, "o")
-            size = 92 if label == "Guided-DiffFNO" else 76
+            # Slightly larger markers help the sparse broken-axis layout feel
+            # less empty without making the local cluster overcrowded.
+            size = 134 if label == "Guided-DiffFNO" else 108
             edge = "#111111" if is_frontier else "white"
-            lw = 1.2 if is_frontier else 0.8
+            lw = 1.3 if is_frontier else 0.9
             alpha = 0.98 if is_frontier else 0.93
+
+            ax_obj = _axes_for_point(energy, violations)
+            if ax_obj is None:
+                continue
 
             ax_obj.scatter(
                 energy,
@@ -338,39 +434,32 @@ def _render_pareto(records: Sequence[Dict[str, object]], out_dir: str, out_basen
                 alpha=alpha,
                 zorder=3,
             )
+            if energy_std > 0 or violations_std > 0:
+                ax_obj.errorbar(
+                    energy,
+                    violations,
+                    xerr=energy_std if energy_std > 0 else None,
+                    yerr=violations_std if violations_std > 0 else None,
+                    fmt="none",
+                    ecolor="#374151",
+                    elinewidth=1.15,
+                    capsize=3.2,
+                    zorder=2,
+                    alpha=0.9,
+                )
 
-        if frontier_records:
-            xs = [float(row["energy"]) for row in frontier_records]
-            ys = [float(row["violations"]) for row in frontier_records]
-            ax_obj.plot(xs, ys, color="#111111", linestyle="--", linewidth=1.4, alpha=0.85, zorder=2)
-
-        if not annotate:
-            return
-
-        offsets = {
-            "Guided-DiffFNO": (18.0, -0.065),
-            "DiffFNO w/o Guidance": (14.0, 0.025),
-            "DiffFNO w/o Residual & Guidance": (14.0, 0.04),
-            "DiffFNO w/o Residual": (16.0, 0.055),
-            "Diffusion Policy (MLP backbone)": (12.0, 0.04),
-            "MPC": (10.0, 0.055),
-        }
-        for row in plot_records:
-            energy = float(row["energy"])
-            violations = float(row["violations"])
-            label = str(row["label"])
             dx, dy = offsets.get(label, (12.0, 0.03))
             text_x = energy + dx
             text_y = violations + dy
-            if label in {"Guided-DiffFNO", "DiffFNO w/o Residual"}:
+            if label in arrow_labels:
                 ax_obj.annotate(
                     _short_label(label),
                     xy=(energy, violations),
                     xytext=(text_x, text_y),
                     textcoords="data",
-                    fontsize=8.8,
+                    fontsize=SMALL_ANNOTATION_FONT_SIZE,
                     color="#1f2937",
-                    ha="left",
+                    ha="left" if dx >= 0 else "right",
                     va="center",
                     arrowprops={"arrowstyle": "-", "linewidth": 0.8, "color": "#6b7280"},
                 )
@@ -379,36 +468,58 @@ def _render_pareto(records: Sequence[Dict[str, object]], out_dir: str, out_basen
                     text_x,
                     text_y,
                     _short_label(label),
-                    fontsize=8.8,
+                    fontsize=SMALL_ANNOTATION_FONT_SIZE,
                     color="#1f2937",
                     ha="left" if dx >= 0 else "right",
                     va="center",
                 )
 
-    _draw_points(ax, annotate=True)
+    def _draw_frontier() -> None:
+        local = [row for row in frontier_records if x_segments[0][0] <= float(row["energy"]) <= x_segments[0][1]]
+        if len(local) < 2:
+            return
+        xs = [float(row["energy"]) for row in local]
+        ys = [float(row["violations"]) for row in local]
+        ax_bl.plot(xs, ys, color="#111111", linestyle="--", linewidth=1.4, alpha=0.85, zorder=2)
 
-    ax.annotate(
-        "Better",
-        xy=(0.08, 0.12),
-        xytext=(0.22, 0.26),
-        xycoords="axes fraction",
-        textcoords="axes fraction",
-        arrowprops={"arrowstyle": "->", "linewidth": 1.0, "color": "#374151"},
-        fontsize=9.5,
-        color="#374151",
-    )
+    def _add_break_marks() -> None:
+        # Follow the official broken-axis recipe: place slash markers directly in
+        # axes coordinates so they stay attached to the spine endpoints.
+        d = 0.55
+        marker_kwargs = dict(
+            marker=[(-1, -d), (1, d)],
+            markersize=11,
+            linestyle="none",
+            color="#111111",
+            mec="#111111",
+            mew=1.0,
+            clip_on=False,
+            zorder=10,
+        )
+
+        # x-axis breaks: only on the visible bottom spines.
+        ax_bl.plot([1], [0], transform=ax_bl.transAxes, **marker_kwargs)
+        ax_bm.plot([0, 1], [0, 0], transform=ax_bm.transAxes, **marker_kwargs)
+        ax_br.plot([0], [0], transform=ax_br.transAxes, **marker_kwargs)
+
+        # y-axis break: only on the visible left spines.
+        ax_tl.plot([0], [0], transform=ax_tl.transAxes, **marker_kwargs)
+        ax_bl.plot([0], [1], transform=ax_bl.transAxes, **marker_kwargs)
+
+    _draw_points()
+    _draw_frontier()
 
     from matplotlib.lines import Line2D
 
     legend_handles = [
-        Line2D([0], [0], marker="o", color="none", markerfacecolor="#9ecae1", markeredgecolor="white", markersize=8, label="Diffusion-based"),
-        Line2D([0], [0], marker="s", color="none", markerfacecolor="#6b7280", markeredgecolor="white", markersize=8, label="Baseline"),
+        Line2D([0], [0], marker="o", color="none", markerfacecolor="#9ecae1", markeredgecolor="white", markersize=9.6, label="Diffusion-based"),
+        Line2D([0], [0], marker="s", color="none", markerfacecolor="#6b7280", markeredgecolor="white", markersize=9.4, label="Baseline"),
         Line2D([0], [0], color="#111111", linestyle="--", linewidth=1.4, label="Pareto frontier"),
     ]
-    ax.legend(
+    fig.legend(
         handles=legend_handles,
         loc="upper center",
-        bbox_to_anchor=(0.52, 0.995),
+        bbox_to_anchor=(0.50, 1.00),
         ncol=3,
         frameon=True,
         fancybox=True,
@@ -418,40 +529,41 @@ def _render_pareto(records: Sequence[Dict[str, object]], out_dir: str, out_basen
         columnspacing=1.4,
         handletextpad=0.5,
     )
+    fig.subplots_adjust(left=0.085, right=0.99, bottom=0.12, top=0.93)
 
-    ax.set_xlabel("Energy consumption (kWh)")
-    ax.set_ylabel("Comfort violations")
-    ax.set_title("Energy-comfort Pareto comparison")
-    ax.grid(True, linestyle="--", linewidth=0.6, alpha=0.35)
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
+    for ax_obj, (xmin, xmax) in zip(top_axes, x_segments):
+        ax_obj.set_xlim(xmin, xmax)
+        ax_obj.set_ylim(*y_top)
+        ax_obj.grid(True, linestyle="--", linewidth=0.6, alpha=0.35)
+        ax_obj.spines["top"].set_visible(False)
+        ax_obj.spines["bottom"].set_visible(False)
+        ax_obj.tick_params(bottom=False, labelbottom=False)
 
-    ax.set_xlim(830.0, 1200.0)
-    ax.set_ylim(0.50, 2.00)
-    ax.set_xticks([850, 900, 1000, 1100, 1200])
-    ax.set_yticks([0.6, 1.0, 1.4, 1.8])
+    for ax_obj, (xmin, xmax) in zip(bottom_axes, x_segments):
+        ax_obj.set_xlim(xmin, xmax)
+        ax_obj.set_ylim(*y_bottom)
+        ax_obj.grid(True, linestyle="--", linewidth=0.6, alpha=0.35)
+        ax_obj.spines["top"].set_visible(False)
 
-    note_lines: List[str] = []
-    if sac_record is not None:
-        note_lines.append(
-            f"SAC ({float(sac_record['energy']):.0f} kWh, {float(sac_record['violations']):.2f} violations)"
-        )
-    if sac_mpc_record is not None:
-        note_lines.append(
-            f"SAC+MPC ({float(sac_mpc_record['energy']):.0f} kWh, {float(sac_mpc_record['violations']):.2f} violations)"
-        )
-    if note_lines:
-        ax.text(
-            0.985,
-            0.04,
-            "\n".join(note_lines) + "\nexcluded from the plot for scale clarity.",
-            transform=ax.transAxes,
-            ha="right",
-            va="bottom",
-            fontsize=8.8,
-            color="#374151",
-            bbox={"boxstyle": "round,pad=0.26", "facecolor": "white", "edgecolor": "#d1d5db", "alpha": 0.94},
-        )
+    for ax_obj in [ax_tm, ax_tr, ax_bm, ax_br]:
+        ax_obj.spines["left"].set_visible(False)
+        ax_obj.tick_params(left=False, labelleft=False)
+
+    ax_tl.spines["right"].set_visible(False)
+    ax_bl.spines["right"].set_visible(False)
+    ax_tm.spines["right"].set_visible(False)
+    ax_bm.spines["right"].set_visible(False)
+
+    ax_tl.set_yticks([3.0, 4.0, 5.0, 6.0])
+    ax_bl.set_yticks([0.5, 1.0, 1.5, 2.0])
+    ax_bl.set_xticks([850, 900, 1000])
+    ax_bm.set_xticks([1800, 1900])
+    ax_br.set_xticks([5950, 6000])
+
+    _add_break_marks()
+
+    fig.supxlabel("Energy consumption (kWh)")
+    fig.supylabel("Comfort violations")
 
     fig.patch.set_facecolor("white")
     out_paths: List[str] = []
@@ -511,13 +623,19 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Output directory for the generated figures.",
     )
+    parser.add_argument(
+        "--aggregate-seeds",
+        action="store_true",
+        help="Aggregate all matched runs for each method and display mean plus standard deviation.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
-    global OUT_DIR, PROFILE
+    global OUT_DIR, PROFILE, AGGREGATE_SEEDS
     args = _parse_args()
     PROFILE = args.profile
+    AGGREGATE_SEEDS = bool(args.aggregate_seeds)
     OUT_DIR = args.out_dir or default_out_dir(ROOT_DIR, PROFILE)
     records = _build_records(LOG_ROOT)
     out_paths = render(records, OUT_DIR)

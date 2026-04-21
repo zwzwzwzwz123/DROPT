@@ -71,10 +71,10 @@ The main technical contributions of this work are summarized as follows:
     \item \textbf{Empirical Validation of Physical Consistency:} Evaluations on the physics-based BEAR benchmark show that Guided-DiffFNO achieves a strong energy--comfort trade-off while also generating smoother, more globally coordinated control trajectories than the unimodal RL and unguided diffusion baselines considered in this study.
 \end{itemize}
 
-The remainder of this paper is organized as follows. Section~2 reviews related work. Section~3 introduces the system model. Section~4 presents the proposed Guided-DiffFNO method. Section~5 describes the experimental setup. Section~6 discusses the experimental results, and Section~7 concludes the paper.
+The remainder of this paper is organized as follows. Section\ref{sec:Related Work} reviews related work. Section\ref{sec:System Model} introduces the system model. Section\ref{sec:Problem Formulation and Solution} presents the proposed Guided-DiffFNO method. Section\ref{sec:Experimental Setup} describes the experimental setup. Section\ref{sec:results} discusses the experimental results, and Section\ref{sec:conclusion} concludes the paper.
 
 
-\section{Related Work}
+\section{Related Work}\label{sec:Related Work}
 
 \subsection{Building HVAC Control Methods}
 Building HVAC control has been extensively studied, with Model Predictive Control (MPC) representing the dominant traditional approach. MPC formulates control as a constrained optimization problem over a receding horizon, enabling explicit handling of thermal comfort constraints and energy objectives simultaneously \cite{drgovna2020all}. However, MPC performance is fundamentally limited by the accuracy of the underlying physical model and the trade-off between prediction horizon length and computational cost: short horizons sacrifice long-term optimality, while longer horizons incur prohibitive computation overhead \cite{drgovna2020all}.
@@ -215,7 +215,7 @@ The formulation above also clarifies the main challenge of the problem: because 
 
 
 \section{Problem Formulation and Solution}
-\label{sec:method}
+\label{sec:Problem Formulation and Solution}
 
 Building on the MDP formulation in Section~\ref{sec:System Model}, 
 we highlight three distinctive challenges that make multi-zone HVAC 
@@ -623,7 +623,7 @@ The resulting controller combines three complementary mechanisms: diffusion-base
 
 
 \section{Experimental Setup}
-\label{sec:exp}
+\label{sec:Experimental Setup}
 
 \subsection{Benchmark and Environment}
 We evaluate all methods on the BEAR \emph{OfficeSmall-Hot\_Dry} benchmark, corresponding to a six-zone office building under Tucson hot-dry weather. Unlike traditional EnergyPlus co-simulation setups that suffer from prohibitive computational overhead and synchronization instability during millions of interactions, the BEAR environment provides a physics-principled, vectorized simulation natively optimized for deep reinforcement learning. This ensures that our generated control trajectories are evaluated under rigorous thermal dynamics while maintaining the computational tractability required for diffusion model training. The control interval is one hour, and each episode spans $168$ steps, i.e., one simulated week. Unless otherwise stated, all controllers share the same environment configuration: target temperature $26^\circ$C, comfort tolerance $\pm 1^\circ$C, energy weight $0.4$, temperature-regulation weight $0.6$, additional comfort-violation penalty coefficient $\lambda=10$, reward scaling factor $\rho=3.5\times 10^{-4}$, and maximum HVAC power $8000$~W. These settings ensure that the compared methods are evaluated under an identical energy--comfort objective.

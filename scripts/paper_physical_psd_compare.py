@@ -30,13 +30,24 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
-from dropt_utils.paper_building_profiles import default_out_dir, resolve_bcfixclean_smalloffice_run_dirs
+from dropt_utils.paper_building_profiles import (
+    default_out_dir,
+    resolve_bcfixclean_smalloffice_run_dir_groups,
+    resolve_bcfixclean_smalloffice_run_dirs,
+)
 from main_building_fno_guided_bcfix_clean import make_building_env_bcfix_clean
 
 
 LOG_ROOT = os.path.join(ROOT_DIR, "log_building")
 OUT_DIR = os.path.join(ROOT_DIR, "paperfigure_bcfixclean_smalloffice")
+AGGREGATE_SEEDS = False
 LOW_FREQ_CPD = 2.0
+BASE_FONT_SIZE = 11
+AXIS_FONT_SIZE = 12.5
+TITLE_FONT_SIZE = 12.5
+TICK_FONT_SIZE = 10.8
+LEGEND_FONT_SIZE = 10.2
+ANNOTATION_FONT_SIZE = 10.0
 
 GUIDED_COLOR = "#1f77b4"
 MLP_COLOR = "#17becf"
@@ -50,13 +61,15 @@ def _setup_matplotlib() -> None:
         {
             "font.family": "serif",
             "font.serif": ["Times New Roman", "DejaVu Serif", "STIXGeneral"],
-            "font.size": 10,
-            "axes.labelsize": 11,
-            "axes.titlesize": 11,
+            "mathtext.fontset": "stix",
+            "mathtext.default": "regular",
+            "font.size": BASE_FONT_SIZE,
+            "axes.labelsize": AXIS_FONT_SIZE,
+            "axes.titlesize": TITLE_FONT_SIZE,
             "axes.linewidth": 0.8,
-            "xtick.labelsize": 9.5,
-            "ytick.labelsize": 10,
-            "legend.fontsize": 9,
+            "xtick.labelsize": TICK_FONT_SIZE,
+            "ytick.labelsize": TICK_FONT_SIZE,
+            "legend.fontsize": LEGEND_FONT_SIZE,
             "pdf.fonttype": 42,
             "ps.fonttype": 42,
         }
@@ -76,6 +89,11 @@ def _save_figure(fig, out_basename: str) -> List[str]:
 def _resolve_run_dirs() -> Dict[str, str]:
     required = ["fno_guided_full", "MLP"]
     return resolve_bcfixclean_smalloffice_run_dirs(LOG_ROOT, required)
+
+
+def _resolve_run_groups() -> Dict[str, List[str]]:
+    required = ["fno_guided_full", "MLP"]
+    return resolve_bcfixclean_smalloffice_run_dir_groups(LOG_ROOT, required)
 
 
 def _load_metadata(run_name: str) -> Dict[str, object]:
@@ -222,6 +240,7 @@ def _write_summary_json(
     metadata: Dict[str, object],
     low_freq_ratio: Dict[str, float],
     run_map: Dict[str, str],
+    run_groups: Dict[str, List[str]] | None = None,
 ) -> None:
     payload = {
         "building_type": metadata["building_type"],
@@ -233,6 +252,9 @@ def _write_summary_json(
         "low_freq_ratio": low_freq_ratio,
         "guided_run_dir": run_map["fno_guided_full"],
         "mlp_run_dir": run_map["MLP"],
+        "guided_run_dirs": list(run_groups.get("fno_guided_full", [])) if run_groups else [run_map["fno_guided_full"]],
+        "mlp_run_dirs": list(run_groups.get("MLP", [])) if run_groups else [run_map["MLP"]],
+        "aggregate_seeds": bool(run_groups),
         "notes": "HVAC power PSD comparison under the current bcfix-clean OfficeSmall setting.",
     }
     with open(out_path, "w", encoding="utf-8") as fh:
@@ -281,12 +303,11 @@ def plot_physical_psd_compare(
         transform=ax.get_xaxis_transform(),
         ha="left",
         va="top",
-        fontsize=9.5,
+        fontsize=ANNOTATION_FONT_SIZE,
         color="#4b5563",
     )
     ax.set_xlabel("Frequency (cycles/day)")
     ax.set_ylabel(r"PSD of HVAC Power (kW$^2$/Hz)")
-    ax.set_title("OfficeSmall Physical Control PSD vs. Guided-DiffFNO/MLP")
     ax.set_yscale("log")
     ax.grid(True, which="both", linestyle="--", linewidth=0.55, alpha=0.30)
     ax.spines["top"].set_visible(False)
@@ -310,16 +331,30 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Number of MPC evaluation episodes to roll out. Defaults to the number of logged paper trajectories.",
     )
+    parser.add_argument(
+        "--aggregate-seeds",
+        action="store_true",
+        help="Aggregate Guided-DiffFNO and Diffusion-MLP spectra across all matched seeds.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
-    global OUT_DIR
+    global OUT_DIR, AGGREGATE_SEEDS
     args = _parse_args()
+    AGGREGATE_SEEDS = bool(args.aggregate_seeds)
     OUT_DIR = args.out_dir or default_out_dir(ROOT_DIR, "bcfixclean_smalloffice")
     os.makedirs(OUT_DIR, exist_ok=True)
 
-    run_map = _resolve_run_dirs()
+    run_groups = _resolve_run_groups() if AGGREGATE_SEEDS else {}
+    if AGGREGATE_SEEDS:
+        run_map = {
+            matcher: sorted(names)[0]
+            for matcher, names in run_groups.items()
+            if names
+        }
+    else:
+        run_map = _resolve_run_dirs()
     metadata = _load_metadata(run_map["fno_guided_full"])
     env_for_meta, _, _ = make_building_env_bcfix_clean(
         building_type=str(metadata["building_type"]),
@@ -345,17 +380,29 @@ def main() -> None:
         if hasattr(env_for_meta, "close"):
             env_for_meta.close()
 
-    guided_traj = _load_npz(run_map["fno_guided_full"])
-    mlp_traj = _load_npz(run_map["MLP"])
-    mpc_episodes = int(args.mpc_episodes) if args.mpc_episodes is not None else int(np.sum(guided_traj["lengths"] > 1))
+    guided_power: List[np.ndarray] = []
+    mlp_power: List[np.ndarray] = []
+    mpc_power: List[np.ndarray] = []
 
-    guided_power = _trajectory_hvac_power_kw(
-        guided_traj["actions"], guided_traj["lengths"], ac_map, float(metadata["max_power"])
-    )
-    mlp_power = _trajectory_hvac_power_kw(
-        mlp_traj["actions"], mlp_traj["lengths"], ac_map, float(metadata["max_power"])
-    )
-    mpc_power = _rollout_physical_mpc(metadata, episodes=mpc_episodes, seed=int(metadata["seed"]))
+    guided_run_names = run_groups.get("fno_guided_full", [run_map["fno_guided_full"]]) if AGGREGATE_SEEDS else [run_map["fno_guided_full"]]
+    mlp_run_names = run_groups.get("MLP", [run_map["MLP"]]) if AGGREGATE_SEEDS else [run_map["MLP"]]
+
+    for run_name in guided_run_names:
+        traj = _load_npz(run_name)
+        guided_power.extend(
+            _trajectory_hvac_power_kw(traj["actions"], traj["lengths"], ac_map, float(metadata["max_power"]))
+        )
+        rollout_metadata = _load_metadata(run_name)
+        mpc_episodes = int(args.mpc_episodes) if args.mpc_episodes is not None else int(np.sum(traj["lengths"] > 1))
+        mpc_power.extend(
+            _rollout_physical_mpc(rollout_metadata, episodes=mpc_episodes, seed=int(rollout_metadata["seed"]))
+        )
+
+    for run_name in mlp_run_names:
+        traj = _load_npz(run_name)
+        mlp_power.extend(
+            _trajectory_hvac_power_kw(traj["actions"], traj["lengths"], ac_map, float(metadata["max_power"]))
+        )
 
     fs_hz = 1.0 / float(metadata["time_resolution"])
     freq_hz, psd_mpc = _average_welch(mpc_power, fs_hz)
@@ -376,7 +423,7 @@ def main() -> None:
     curve_csv = os.path.join(OUT_DIR, "smalloffice_physical_psd_curves.csv")
     summary_json = os.path.join(OUT_DIR, "smalloffice_physical_psd_summary.json")
     _write_curve_csv(curve_csv, freq_hz, freq_cpd, psd_mpc, psd_guided, psd_mlp)
-    _write_summary_json(summary_json, metadata, low_freq_ratio, run_map)
+    _write_summary_json(summary_json, metadata, low_freq_ratio, run_map, run_groups if AGGREGATE_SEEDS else None)
 
     for path in out_paths + [curve_csv, summary_json]:
         print(path)
