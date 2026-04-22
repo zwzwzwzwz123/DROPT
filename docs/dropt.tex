@@ -76,25 +76,20 @@ The remainder of this paper is organized as follows. Section\ref{sec:Related Wor
 
 \section{Related Work}\label{sec:Related Work}
 
-\subsection{Building HVAC Control Methods}
-Building HVAC control has been extensively studied, with Model Predictive Control (MPC) representing the dominant traditional approach. MPC formulates control as a constrained optimization problem over a receding horizon, enabling explicit handling of thermal comfort constraints and energy objectives simultaneously \cite{drgovna2020all}. However, MPC performance is fundamentally limited by the accuracy of the underlying physical model and the trade-off between prediction horizon length and computational cost: short horizons sacrifice long-term optimality, while longer horizons incur prohibitive computation overhead \cite{drgovna2020all}.
+\subsection{HVAC Control and Joint Multi-Zone Decision Making}
+Building HVAC control has long been dominated by MPC because it can explicitly optimize energy and comfort under constraints \cite{drgovna2020all}. Its practical performance, however, still depends on model fidelity and repeated online optimization, both of which become more difficult in large multi-zone buildings. RL offers a model-free alternative and has shown promising results for HVAC operation in both single-zone and multi-zone settings \cite{wei2017deep,biemann2021experimental,mason2019review,alsayed2024hvacreview,ding2024multi}. Yet many existing methods still rely on deterministic or unimodal policies, per-zone decompositions, or other local action parameterizations, even when coordination among adjacent zones is important \cite{vazquez2020marlisa,yu2021multiagent,xue2025multi,cui2024energy,fang2023cross,dai2023reinforcement}. This leaves a gap for policies that directly generate the full joint action vector while respecting cross-zone coupling.
 
-Deep reinforcement learning (DRL) has emerged as a promising alternative, eliminating the need for explicit physical models by learning control policies through environmental interaction. Recent reviews document rapid progress in RL-based HVAC control while also highlighting persistent challenges in sample efficiency, safety, and generalization \cite{mason2019review,alsayed2024hvacreview}. Methods based on DDPG, SAC, and related actor--critic formulations have demonstrated meaningful energy savings while maintaining thermal comfort in both single-zone and multi-zone settings \cite{wei2017deep,biemann2021experimental,ding2024multi}. Building on these foundations, recent DRL advances have explored multi-agent coordination, model-based learning, cross-spatial transferability, and comfort-/preference-aware optimization for complex HVAC management \cite{yu2021multiagent,xue2025multi,cui2024energy,ding2024multi,fang2023cross,dai2023reinforcement}. Although multi-agent formulations partially address coordination, most existing approaches still rely on per-zone agents, local action parameterizations, or other decomposed control structures rather than a generative model of the full joint action vector \cite{vazquez2020marlisa,yu2021multiagent,xue2025multi}. As adjacent zones exchange heat through walls and airflow, this motivates the need for a control framework that explicitly models the joint spatial structure of multi-zone action spaces.
+This gap is especially relevant in buildings where the optimization target is inherently system-level rather than zone-local. A controller that reduces the temperature error of one room by inducing aggressive neighboring-zone actuation may appear locally beneficial under a decomposed formulation, yet still be undesirable once energy use, comfort risk, and cross-zone interactions are considered jointly. Multi-agent or decentralized formulations can reduce action dimensionality, but they often shift the burden of coordination to reward shaping, communication design, or post hoc arbitration among local agents \cite{vazquez2020marlisa,yu2021multiagent,xue2025multi}. In contrast, our focus is on centralized \emph{joint-action generation}: the policy should model the full multi-zone control vector as a structured object and learn coordination directly in the action representation itself.
 
-\subsection{Diffusion Models for Decision Making}
-Diffusion models have recently demonstrated remarkable capabilities in sequential decision making and control. Diffusion Policy \cite{chi2025diffusion} introduced the conditional denoising diffusion framework for robot visuomotor control, showing advantages in modeling multimodal action distributions, handling high-dimensional action spaces, and training stability, achieving an average 46.9\% performance improvement across twelve tasks. Subsequent works have extended diffusion models to offline reinforcement learning: Diffuser \cite{janner2022planning} modeled full trajectories as diffusion processes, while Diffusion-QL \cite{wang2023diffusion} combined diffusion-based policy representation with Q-value guidance for offline policy optimization.
+\subsection{Diffusion Policies for Continuous Control}
+Diffusion models provide a more expressive alternative to conventional continuous-control policies because they can model complex action distributions through iterative denoising. Diffusion Policy \cite{chi2025diffusion} demonstrated strong performance on high-dimensional control, while Diffuser \cite{janner2022planning} and Diffusion-QL \cite{wang2023diffusion} extended diffusion ideas to RL and planning. To the best of our knowledge, such policies have not been systematically studied for building HVAC control. Moreover, existing diffusion policies typically use MLP denoisers, which do not explicitly encode the spatial coupling of multi-zone actions.
 
-To the best of our knowledge, diffusion-based policies have not yet been systematically studied for building HVAC control in the peer-reviewed literature reviewed above. Furthermore, the denoising networks in existing diffusion policies predominantly adopt MLP architectures, which lack the inductive bias necessary to model spatial coupling relationships across multiple control zones. This architectural limitation prevents standard Diffusion Policy from capturing the coordinated structure of multi-zone action spaces, motivating our replacement of the MLP backbone with a spatially-aware neural operator.
+Most existing diffusion-control studies also target domains whose structure differs substantially from building control. In robotics, diffusion models are often used to generate temporally extended action chunks or visuomotor trajectories, and the main modeling challenge is multimodality over time \cite{chi2025diffusion,janner2022planning}. In HVAC control, however, an equally important challenge lies in the \emph{spatial} structure of the action itself: each dimension corresponds to a thermal zone embedded in a coupled physical system. A diffusion formulation is attractive here not only because it relaxes unimodal policy assumptions, but also because its iterative denoising process provides a natural interface for injecting structure and value information into the generated joint action.
 
-\subsection{Fourier Neural Operators}
-The Fourier Neural Operator (FNO) \cite{li2021fourier} was originally proposed for learning solution operators of parametric partial differential equations (PDEs). FNO operates by combining global integral operators parameterized in the Fourier domain with local nonlinear activation functions, enabling efficient modeling of long-range spatial dependencies that characterize PDE solutions. Recent analyses of neural operators, including FNO-based models, suggest a tendency to fit dominant low-frequency components more readily than fine high-frequency details, especially on multiscale problems \cite{qin2024toward,liu2024mitigating}.
+\subsection{Structural Priors and Guided Diffusion}
+FNOs \cite{li2021fourier} provide a natural structural prior when long-range coupling matters, and their tendency to emphasize dominant low-frequency components can be beneficial when coordinated control should avoid cross-zone chatter \cite{qin2024toward,liu2024mitigating}. We therefore use FNO not to claim that HVAC actions obey a PDE solution operator, but to bias the denoiser toward globally coherent joint actions under thermal coupling \cite{goyal2012method,wen2022u}. In parallel, guided diffusion has shown that inference-time gradients can steer generation without retraining the denoiser \cite{dhariwal2021diffusion,ho2021classifier}. RL-oriented variants have begun to use policy or value signals for this purpose \cite{jackson2024policy,fang2025diffusion}, but they often rely on additional guidance networks or training-time modifications. Our method instead combines an FNO denoiser with inference-time guidance from the critic already required by the actor--critic framework.
 
-We observe a structural analogy between PDE spatial coupling and multi-zone HVAC action coordination: just as PDE solutions must satisfy spatial continuity constraints across neighboring nodes, multi-zone control setpoints must respect inter-zone thermal coupling to achieve globally coherent control. Multi-zone buildings exhibit well-documented thermal coupling between adjacent zones through conductive and convective heat transfer \cite{goyal2012method}. By replacing the denoising network with FNO, we generate all zone actions jointly through global frequency-domain mixing. In our setting, emphasizing smoother low-frequency cross-zone structure is potentially beneficial because coordinated HVAC setpoints are expected to vary coherently across neighboring zones while avoiding unnecessary high-frequency chatter. We therefore use FNO not as a claim that HVAC actions exactly obey PDE solution structure, but as an inductive bias for learning globally consistent joint control patterns. This differs from PDE surrogate settings in which insufficient high-frequency fidelity can be problematic \cite{wen2022u}.
-
-\subsection{Guided Diffusion for Control}
-Classifier Guidance \cite{dhariwal2021diffusion} demonstrated that diffusion sampling can be steered at inference time by incorporating gradients from an auxiliary classifier, improving generation quality without retraining the diffusion model. This inference-time guidance paradigm is particularly attractive for control applications, as it decouples the guidance signal from the training procedure. Classifier-Free Guidance \cite{ho2021classifier} achieved similar effects by modifying the training process itself, but at the cost of requiring retraining when the guidance objective changes.
-
-Recent works have begun exploring RL-based signals for guiding diffusion policies. Policy-Guided Diffusion \cite{jackson2024policy} applied policy gradient signals to steer offline RL trajectory generation toward high-return regions. Diffusion Actor-Critic (DAC) \cite{fang2025diffusion} incorporated Q-value gradients as a soft guidance term during training. However, these approaches either require training additional guidance networks or introduce guidance during training, incurring non-trivial overhead. In contrast, our critic guidance directly leverages the Q-network already present in the RL training framework to guide the denoising process at inference time, achieving safety-aware action refinement in the building-control setting without introducing an additional guidance network.
+This positioning differentiates our work from two adjacent lines of research. First, neural operators in building applications are commonly used as fast surrogates for thermal dynamics or PDE-governed fields; in our setting, by contrast, the operator acts inside the \emph{policy} and regularizes the geometry of the generated action vector rather than approximating the environment transition. Second, many guided-diffusion methods in RL improve generation quality by introducing auxiliary classifiers, reward models, or preference models. Our design choice is intentionally lighter: we reuse the conservative critic already needed for off-policy learning, and we invoke it only during reverse sampling so that the base diffusion policy remains unchanged. This separation also makes the method easier to interpret experimentally, because the contributions of structural prior and value-guided refinement can be studied independently.
 
 
 \section{System Model}\label{sec:System Model}
@@ -216,6 +211,7 @@ The formulation above also clarifies the main challenge of the problem: because 
 
 \section{Problem Formulation and Solution}
 \label{sec:Problem Formulation and Solution}
+\label{sec:method}
 
 Building on the MDP formulation in Section~\ref{sec:System Model}, 
 we highlight three distinctive challenges that make multi-zone HVAC 
@@ -227,19 +223,7 @@ These characteristics motivate a policy class that is distributionally expressiv
 
 \subsection{Conditional Diffusion Policy for Continuous HVAC Control}
 
-Instead of directly regressing a deterministic action from the current state, we model policy generation as a conditional denoising diffusion process over the action space\cite{ho2020denoising}. Let $\mathbf{x}_0 \in \mathbb{R}^N$ denote the clean action to be generated, and let $\mathbf{x}_k$ denote its noisy version at diffusion step $k \in \{1,\dots,K\}$, where $K$ is the diffusion horizon. The forward diffusion process is defined as
-\begin{equation}
-q(\mathbf{x}_k \mid \mathbf{x}_0)
-=
-\mathcal{N}
-\left(
-\mathbf{x}_k;
-\sqrt{\bar{\alpha}_k}\mathbf{x}_0,
-(1-\bar{\alpha}_k)\mathbf{I}
-\right),
-\label{eq:forward_diffusion}
-\end{equation}
-where $\alpha_k = 1-\beta_k$ and $\bar{\alpha}_k = \prod_{i=1}^{k}\alpha_i$. Equivalently, $\mathbf{x}_k$ can be sampled in closed form as
+Instead of directly regressing a deterministic action from the current state, we model policy generation as a conditional denoising diffusion process over the action space \cite{ho2020denoising}. Let $\mathbf{x}_0 \in \mathbb{R}^N$ denote the clean action and $\mathbf{x}_k$ its noisy version at diffusion step $k \in \{1,\dots,K\}$. Under the standard VP diffusion parameterization,
 \begin{equation}
 \mathbf{x}_k
 =
@@ -250,48 +234,19 @@ where $\alpha_k = 1-\beta_k$ and $\bar{\alpha}_k = \prod_{i=1}^{k}\alpha_i$. Equ
 \boldsymbol{\epsilon}\sim\mathcal{N}(\mathbf{0},\mathbf{I}).
 \label{eq:noisy_action}
 \end{equation}
-
-In our implementation, the diffusion actor is trained under the behavior-cloning setting, and the denoiser is parameterized to \emph{directly predict the clean action} rather than the injected noise. Specifically, the denoiser is written as
+where $\alpha_k = 1-\beta_k$ and $\bar{\alpha}_k = \prod_{i=1}^{k}\alpha_i$. In our implementation, the denoiser is parameterized to \emph{directly predict the clean action}:
 \begin{equation}
 \hat{\mathbf{x}}_0 = f_{\theta}(\mathbf{x}_k,k,\mathbf{s}_t),
 \label{eq:x0_prediction}
 \end{equation}
-where $f_\theta(\cdot)$ takes as input the noisy action, the diffusion step, and the current building state.
-
-Given the reconstructed clean action $\hat{\mathbf{x}}_0$, the reverse posterior is written as
-\begin{equation}
-q(\mathbf{x}_{k-1}\mid \mathbf{x}_k,\hat{\mathbf{x}}_0)
-=
-\mathcal{N}
-\left(
-\mathbf{x}_{k-1};
-\boldsymbol{\mu}_k(\hat{\mathbf{x}}_0,\mathbf{x}_k),
-\sigma_k^2 \mathbf{I}
-\right),
-\label{eq:reverse_posterior}
-\end{equation}
-with posterior mean
+where $f_\theta(\cdot)$ takes the noisy action, the diffusion step, and the current state as input. The reverse posterior then follows the standard DDPM form of Ho \emph{et al.} \cite{ho2020denoising}; under the $\mathbf{x}_0$-prediction parameterization, its mean is
 \begin{equation}
 \boldsymbol{\mu}_k(\hat{\mathbf{x}}_0,\mathbf{x}_k)
 =
 c_1(k)\hat{\mathbf{x}}_0 + c_2(k)\mathbf{x}_k,
 \label{eq:posterior_mean}
 \end{equation}
-where the coefficients are explicitly given by
-\begin{equation}
-c_1(k)=\frac{\beta_k\sqrt{\bar{\alpha}_{k-1}}}{1-\bar{\alpha}_k},
-\qquad
-c_2(k)=\frac{(1-\bar{\alpha}_{k-1})\sqrt{\alpha_k}}{1-\bar{\alpha}_k},
-\label{eq:posterior_coeff}
-\end{equation}
-and
-\begin{equation}
-\sigma_k^2 = \frac{\beta_k(1-\bar{\alpha}_{k-1})}{1-\bar{\alpha}_k}.
-\label{eq:posterior_var}
-\end{equation}
-Starting from Gaussian noise $\mathbf{x}_K \sim \mathcal{N}(\mathbf{0},\mathbf{I})$, the policy iteratively samples $\mathbf{x}_{k-1}$ from $\mathbf{x}_k$ until the final action $\mathbf{x}_0$ is obtained. The final output is clipped into the feasible control range $[-1,1]^N$.
-
-This formulation is particularly suitable for HVAC control. Unlike unimodal Gaussian policies, diffusion policies do not impose a restrictive parametric form on the action distribution. More importantly, the iterative denoising trajectory provides a natural interface for injecting structural priors and value-based guidance into the action generation process.
+where $c_1(k)$ and $c_2(k)$ are the standard DDPM coefficients determined by the VP schedule. The posterior variance is determined by the same schedule. Starting from $\mathbf{x}_K \sim \mathcal{N}(\mathbf{0},\mathbf{I})$, the policy iteratively samples backward to obtain the final action, which is clipped into the feasible range $[-1,1]^N$. Compared with unimodal Gaussian policies, this formulation offers a more expressive action model and a natural interface for structural priors and value-based guidance.
 
 Fig.~\ref{fig:guided_difffno_framework} summarizes the overall architecture and training/inference workflow of the proposed Guided-DiffFNO framework.
 
@@ -430,35 +385,7 @@ c_1(k)\tilde{\mathbf{x}}_0 + c_2(k)\mathbf{x}_k.
 The reverse sampling process then proceeds accordingly.
 
 This design has two advantages. First, critic guidance is integrated \emph{within} the reverse diffusion dynamics rather than applied as a post hoc correction after action generation. Consequently, value information influences the denoising trajectory throughout the sampling process. Second, because thermal comfort violations are already reflected in the reward, the learned critic implicitly discourages actions likely to induce unsafe temperature deviations. Therefore, critic guidance improves value alignment and empirically promotes comfort-compliant action generation. However, it should be interpreted as value-guided refinement rather than as a formal hard-safety guarantee.
-
-\begin{algorithm}[t]
-\caption{Critic guidance during reverse sampling for Guided-DiffFNO}
-\label{alg:guided_sampling}
-\KwIn{Current state $\mathbf{s}$, denoiser $f_{\theta}$, critics $Q_{\phi_1}$ and $Q_{\phi_2}$, diffusion horizon $K$, guidance scale $\eta$.}
-\KwOut{Generated action $\mathbf{x}_0^\ast$.}
-
-Sample initial noise $\mathbf{x}_K \sim \mathcal{N}(\mathbf{0},\mathbf{I})$\;
-
-\For{$k = K, K-1, \ldots, 1$}{
-    Predict clean action estimate $\hat{\mathbf{x}}_0 = f_{\theta}(\mathbf{x}_k,k,\mathbf{s})$\;
-    Compute conservative critic value
-    $Q_{\phi}^{\min}(\mathbf{s},\hat{\mathbf{x}}_0)=\min\{Q_{\phi_1}(\mathbf{s},\hat{\mathbf{x}}_0),Q_{\phi_2}(\mathbf{s},\hat{\mathbf{x}}_0)\}$\;
-    Compute value gradient
-    $\mathbf{g}_k = \nabla_{\mathbf{a}} Q_{\phi}^{\min}(\mathbf{s},\mathbf{a})|_{\mathbf{a}=\hat{\mathbf{x}}_0}$\;
-    Correct the reconstructed action
-    $\tilde{\mathbf{x}}_0 = \mathrm{clip}(\hat{\mathbf{x}}_0 + \eta \mathbf{g}_k,-1,1)$\;
-    Compute posterior mean
-    $\boldsymbol{\mu}_k = c_1(k)\tilde{\mathbf{x}}_0 + c_2(k)\mathbf{x}_k$\;
-    \eIf{$k > 1$}{
-        Sample Gaussian noise $\mathbf{z} \sim \mathcal{N}(\mathbf{0},\mathbf{I})$\;
-        Update reverse sample
-        $\mathbf{x}_{k-1} = \boldsymbol{\mu}_k + \sigma_k \mathbf{z}$\;
-    }{
-        Set $\mathbf{x}_0^\ast = \mathrm{clip}(\boldsymbol{\mu}_k,-1,1)$\;
-    }
-}
-\Return{$\mathbf{x}_0^\ast$}\;
-\end{algorithm}
+At inference, the controller starts from Gaussian noise and, for each reverse step, applies the denoiser, evaluates the critic gradient in \eqref{eq:qgrad}, forms the guided reconstruction in \eqref{eq:guided_x0}, and samples the next state from the posterior with mean \eqref{eq:guided_mean}. The final action is clipped to $[-1,1]^N$ before execution.
 
 \subsection{Critic Learning}
 
@@ -615,9 +542,7 @@ Initialize the behavior-cloning weight $\omega \leftarrow \omega_0$\;
 
 \subsection{Inference Procedure}
 
-During deployment, the current building state $\mathbf{s}_t$ is fed to the diffusion actor, which initializes the reverse chain from Gaussian noise $\mathbf{x}_K \sim \mathcal{N}(\mathbf{0},\mathbf{I})$. For each reverse step $k=K,K-1,\ldots,1$, the DiffFNO backbone predicts the clean action estimate, critic guidance is injected when enabled, and the posterior $q(\mathbf{x}_{k-1}\mid \mathbf{x}_k,\tilde{\mathbf{x}}_0)$ is sampled. After the final reverse step, the resulting action $\mathbf{x}_0$ is clipped to $[-1,1]^N$ and applied to the building environment.
-
-The resulting controller combines three complementary mechanisms: diffusion-based generative action modeling, spectral structure learning in the multi-zone action space, and critic-guided value refinement during reverse sampling. Together, these components enable the policy to generate actions that are smoother, more coordinated, and better aligned with long-term HVAC performance objectives.
+During deployment, the current state $\mathbf{s}_t$ is passed to the diffusion actor, which initializes the reverse chain from Gaussian noise and iteratively applies DiffFNO denoising with optional critic guidance until the final action is obtained. The resulting controller combines generative action modeling, spectral structure learning over the joint action vector, and value-based refinement during sampling, enabling smoother and better coordinated HVAC control.
 
 
 
@@ -626,26 +551,55 @@ The resulting controller combines three complementary mechanisms: diffusion-base
 \label{sec:Experimental Setup}
 
 \subsection{Benchmark and Environment}
-We evaluate all methods on the BEAR \emph{OfficeSmall-Hot\_Dry} benchmark, corresponding to a six-zone office building under Tucson hot-dry weather. Unlike traditional EnergyPlus co-simulation setups that suffer from prohibitive computational overhead and synchronization instability during millions of interactions, the BEAR environment provides a physics-principled, vectorized simulation natively optimized for deep reinforcement learning. This ensures that our generated control trajectories are evaluated under rigorous thermal dynamics while maintaining the computational tractability required for diffusion model training. The control interval is one hour, and each episode spans $168$ steps, i.e., one simulated week. Unless otherwise stated, all controllers share the same environment configuration: target temperature $26^\circ$C, comfort tolerance $\pm 1^\circ$C, energy weight $0.4$, temperature-regulation weight $0.6$, additional comfort-violation penalty coefficient $\lambda=10$, reward scaling factor $\rho=3.5\times 10^{-4}$, and maximum HVAC power $8000$~W. These settings ensure that the compared methods are evaluated under an identical energy--comfort objective.
+We evaluate all methods on the BEAR \emph{OfficeSmall-Hot\_Dry} benchmark, corresponding to a six-zone office building under Tucson hot-dry weather. Unlike traditional EnergyPlus co-simulation setups, which suffer from prohibitive computational overhead and synchronization instability during millions of interactions, the BEAR environment provides a physics-grounded, vectorized simulator optimized for deep reinforcement learning. This setting allows us to evaluate generated control trajectories under rigorous thermal dynamics while preserving the computational efficiency required for diffusion-model training. The control interval is one hour, and each episode spans $168$ steps, i.e., one simulated week. Unless otherwise stated, all controllers share the same environment configuration: target temperature $26^\circ$C, comfort tolerance $\pm 1^\circ$C, energy weight $0.4$, temperature-regulation weight $0.6$, additional comfort-violation penalty coefficient $\lambda=10$, reward scaling factor $\rho=3.5\times 10^{-4}$, and maximum HVAC power $8000$~W. These settings ensure that all methods are evaluated under an identical energy--comfort objective.
 
 \subsection{Compared Methods and Training Protocol}
 We compare Guided-DiffFNO against four diffusion-family variants and three conventional baselines: DiffFNO w/o Guidance, DiffFNO w/o Residual \& Guidance, DiffFNO w/o Residual, Diffusion-MLP (i.e., Diffusion Policy with an MLP backbone), MPC, SAC\cite{haarnoja2018soft}, and SAC+MPC. For the diffusion-family methods, we use the same actor--critic training pipeline and expert-regularization schedule described in Section~\ref{sec:method}, changing only the component under study in each ablation. Expert demonstrations are generated by an MPC controller with planning horizon $3$.
 
-For the OfficeSmall benchmark reported in this paper, all learning-based methods are trained for $1.0\times 10^6$ environment steps with batch size $256$, replay buffer size $10^6$, discount factor $\gamma=0.99$, and $n$-step return with $n=3$. We use step-per-collect $1024$, step-per-epoch $4096$, update-per-step $0.5$, actor learning rate $10^{-4}$, critic learning rate $2\times 10^{-5}$, weight decay $10^{-4}$, and exploration noise standard deviation $0.05$. All diffusion policies use $K=6$ denoising steps with the VP noise schedule. For Guided-DiffFNO and its FNO-based ablations, the default backbone uses width $48$, retained Fourier modes $4$, one spectral layer, and Mish activations. When critic guidance is enabled, the inference-time guidance scale is set to $\eta=0.5$; this value is kept fixed throughout the guided experiments so that the reported ablations isolate the effect of enabling guidance rather than retuning its strength. The behavior-cloning weight is initialized at $0.8$ and linearly decayed to $0.1$ over the first $1.5\times 10^5$ actor updates. This schedule is kept identical across all diffusion-family variants and serves as a shared stabilization setting rather than a separate ablation factor in this paper.
+To make the comparison as controlled as possible, all learning-based methods use the same state inputs, action bounds, reward function, replay setting, training horizon, and evaluation environment. In particular, the four diffusion-family variants differ only in the component being studied: whether the denoiser backbone is FNO or MLP, whether the residual pathway is present, and whether critic guidance is activated at inference. This design matters because diffusion methods are sensitive to auxiliary choices; without shared training and guidance settings, improvements could otherwise be attributed to retuning rather than to the proposed structural changes. For the conventional baselines, we preserve their native decision rules while evaluating them under the same simulator, weather profile, and comfort objective, so that the comparison isolates controller quality rather than differences in task definition.
+
+The shared training and inference hyperparameters for the learning-based methods are summarized in Table~\ref{tab:training_setup}. We keep the guidance scale and the behavior-cloning decay schedule fixed across diffusion-family variants so that the ablations isolate architectural and guidance effects rather than retuning auxiliary settings.
+
+\begin{table*}[t]
+\centering
+\caption{Shared hyperparameters for the learning-based methods.}
+\label{tab:training_setup}
+\scriptsize
+\setlength{\tabcolsep}{5pt}
+\renewcommand{\arraystretch}{1.05}
+\begin{tabular}{
+>{\raggedright\arraybackslash}p{0.17\textwidth}
+>{\raggedright\arraybackslash}p{0.11\textwidth}
+>{\raggedright\arraybackslash}p{0.21\textwidth}
+>{\raggedright\arraybackslash}p{0.31\textwidth}}
+\toprule
+Setting & Value & Setting & Value \\
+\midrule
+Training steps & $1.0\times 10^6$ & Batch size / replay buffer & $256$ / $10^6$ \\
+Discount / $n$-step return & $0.99$ / $3$ & Step-per-collect / epoch & $1024$ / $4096$ \\
+Update-per-step & $0.5$ & Actor / critic learning rate & $10^{-4}$ / $2\times 10^{-5}$ \\
+Weight decay / exploration noise & $10^{-4}$ / $0.05$ & Diffusion steps $K$ & $6$ \\
+FNO width / retained modes & $48$ / $4$ & Spectral layers / activation & $1$ / Mish \\
+Guidance scale $\eta$ & $0.5$ & BC weight schedule $\omega$ & $0.8 \rightarrow 0.1$ over $1.5\times 10^5$ updates \\
+\bottomrule
+\end{tabular}
+\end{table*}
 
 \textbf{Inference latency.} To make the deployment overhead explicit, we benchmarked the final Guided-DiffFNO policy on logged OfficeSmall evaluation states using a single NVIDIA RTX 3070 GPU. Including all six denoising steps and one critic-gradient computation per reverse step, the mean inference latency is $30.9$~ms per control decision for batch size $1$ (about $5.2$~ms per denoising step), which is small relative to the one-hour control interval used in this study.
 
 \subsection{Evaluation Protocol and Metrics}
-We report four primary metrics: average episode HVAC energy (kWh), average comfort violations, final test reward, and mean absolute action change. For each learning-based method, Table~\ref{tab:overall_results} reports the three-seed mean and standard deviation. The reward of each seed is first averaged over its last five evaluation checkpoints, and the Pareto scatter plot uses the same per-seed summary before seed aggregation. For the normalized ablation heatmap only, we use mean squared action increment as an auxiliary smoothness score because it penalizes large action jumps more strongly; this quantity is reported only after min--max normalization and is not numerically compared against the mean absolute action change values in Table~\ref{tab:overall_results}. To analyze physical consistency, we additionally examine cross-zone coordination, action power spectral density for the learned controllers, a complementary HVAC-power spectral comparison against the BEAR MPC controller, representative room trajectories, and the association between critic-estimated $Q(s,a)$ and Monte Carlo return on logged evaluation samples. Unless explicitly noted as representative-seed diagnostics, the statistical figures in this section use the three-seed estimate. The room-level trajectories, the multi-zone coordination plot, and the currently referenced $Q$--return mechanism figure intentionally retain a canonical single seed so that their local temporal or sample-wise structure remains directly interpretable.
+We report four primary metrics: average episode HVAC energy, average comfort violations, final test reward, and mean absolute action change. Table~\ref{tab:overall_results} reports the three-seed mean and standard deviation for all learning-based methods, where each seed reward is averaged over its last five evaluation checkpoints before seed aggregation. We additionally analyze cross-zone coordination, action and HVAC-power spectra, representative room trajectories, and the association between critic-estimated $Q(s,a)$ and Monte Carlo return. Unless noted otherwise, the plots in this section use three-seed statistics; only the local mechanism figures retain a canonical representative seed for interpretability.
+
+These metrics capture complementary aspects of controller quality: energy and comfort violations reflect the primary task objective, final test reward summarizes the optimized RL objective, and mean absolute action change measures control smoothness. In the analysis, we therefore emphasize Pareto structure and consistency across scalar, spectral, and coordination results rather than drawing conclusions from any single metric alone.
 
 \providecommand{\resultfigdir}{figures}
 
 \section{Simulation Results}
 \label{sec:results}
 
-\begin{table*}[t]
+\begin{table*}[!t]
 \centering
-\caption{Overall comparison on the BEAR OfficeSmall-Hot\_Dry task. For all learning-based methods, each entry reports the three-seed mean $\pm$ standard deviation. Energy is the average HVAC energy per episode. Violations denote the average thermal comfort violations. Reward is the final test reward, where each seed is first averaged over its last five checkpoints before seed aggregation. For the action smoothness metric, lower mean absolute action change indicates smoother control. For the learning-based methods, this metric is computed from the logged evaluation action trajectories. For MPC, we compute the same quantity from the closed-loop physical MPC action trajectory rolled out in the same bcfix-clean environment used for the PSD comparison.}
+\caption{Overall comparison on the BEAR OfficeSmall-Hot\_Dry task. Learning-based methods report the three-seed mean $\pm$ standard deviation. Lower mean $|\Delta a|$ indicates smoother control.}
 \label{tab:overall_results}
 \footnotesize
 \setlength{\tabcolsep}{4.5pt}
@@ -666,162 +620,112 @@ SAC+MPC & 1864.6 $\pm$ 74.6 & 3.431 $\pm$ 0.294 & -2.600 $\pm$ 0.222 & 0.1729 $\
 \end{tabular}
 \end{table*}
 
-\begin{figure}[t]
-\centering
-\includegraphics[width=\linewidth]{\resultfigdir/compare_energy_violations.pdf}
-\caption{Energy--comfort Pareto comparison in the practically relevant performance region. Each point summarizes the three-seed mean HVAC energy consumption and comfort violations, and the error bars denote one standard deviation across seeds. Lower-left is better. The dashed line connects the non-dominated methods based on mean values. For scale clarity, the highly suboptimal SAC and SAC+MPC baselines are omitted from the scatter plot but still reported in Table~\ref{tab:overall_results}.}
-\label{fig:energy_violations}
-\end{figure}
-
 \subsection{Overall Energy--Comfort Trade-off}
 
-Table~\ref{tab:overall_results} and Fig.~\ref{fig:energy_violations} summarize the main three-seed quantitative results. The Pareto view is particularly informative here because the HVAC task is intrinsically bi-objective: a controller is only practically meaningful if it reduces energy use while simultaneously maintaining comfort compliance. Under this evaluation, the non-dominated frontier in Fig.~\ref{fig:energy_violations} is still traced by two guided FNO variants, namely DiffFNO w/o Residual and Guided-DiffFNO. All other displayed methods are dominated in the mean energy--comfort plane. In particular, both DiffFNO w/o Guidance and DiffFNO w/o Residual \& Guidance remain strictly dominated reference points rather than frontier candidates.
+Table~\ref{tab:overall_results} and Fig.~\ref{fig:energy_violations} show that Guided-DiffFNO and DiffFNO w/o Residual define the Pareto frontier. The latter attains the lowest raw energy ($867.8 \pm 5.3$~kWh), whereas Guided-DiffFNO attains the lowest comfort violations ($0.500 \pm 0.030$) and the best final reward ($-0.490 \pm 0.018$) with only a $3.8$~kWh/episode energy gap. On this benchmark, the full model is therefore the better-balanced controller when energy and thermal safety are considered jointly.
 
-Among these frontier methods, Guided-DiffFNO lies toward the safety-oriented end of the trade-off curve. It achieves the lowest comfort violation score of $0.500 \pm 0.030$ and the highest final test reward of $-0.490 \pm 0.018$, while keeping average HVAC energy at $871.5 \pm 3.2$~kWh. DiffFNO w/o Residual attains the lowest raw energy value ($867.8 \pm 5.3$~kWh), but at worse comfort compliance ($0.614 \pm 0.046$ violations) and lower final reward ($-0.558 \pm 0.029$). The mean energy gap between the two is only $3.8$~kWh per episode, whereas Guided-DiffFNO reduces comfort violations by $18.6\%$ relative to DiffFNO w/o Residual. This distinction remains important: from the perspective of building control, minimizing HVAC power alone is not a sufficient objective, because a useful controller must optimize energy and thermal safety jointly rather than overemphasizing one side of the trade-off. On this benchmark, Guided-DiffFNO appears to offer one of the most balanced solutions among the compared methods.
+The gain from critic guidance is also clear. Relative to unguided DiffFNO, Guided-DiffFNO reduces energy by $3.3\%$, violations by $43.6\%$, and improves the final reward from $-0.738$ to $-0.490$, indicating that guidance changes the denoising trajectory in a practically meaningful way. Compared with Diffusion-MLP and MPC, the proposed method still achieves double-digit energy reductions together with markedly fewer violations, while the SAC-based baselines remain far from the relevant operating region.
 
-The contribution of critic guidance during reverse sampling is also visible in this comparison. Relative to the unguided DiffFNO variant, Guided-DiffFNO reduces mean energy consumption from $901.3$~kWh to $871.5$~kWh and cuts mean comfort violations from $0.886$ to $0.500$, corresponding to a $3.3\%$ reduction in energy and a $43.6\%$ reduction in violations. The final test reward also improves from $-0.738$ to $-0.490$. Notably, the unguided model no longer lies close to the Pareto frontier because it is simultaneously outperformed by both guided FNO variants. This observation suggests that value-guided refinement is not merely a cosmetic adjustment to the final sampled action, but changes the denoising trajectory in a way that is associated with higher-value and safer control decisions.
-
-The comparison with non-spectral and conventional baselines is also pronounced. Relative to Diffusion-MLP, Guided-DiffFNO reduces mean energy by $12.0\%$ and mean comfort violations by $65.3\%$. Relative to MPC, the proposed method lowers energy by $13.3\%$ and violations by $71.9\%$. The excluded SAC and SAC+MPC baselines, although omitted from Fig.~\ref{fig:energy_violations} for scale clarity, remain important as negative references in Table~\ref{tab:overall_results}: SAC consumes $5980.4 \pm 27.3$~kWh with $5.483 \pm 0.046$ violations, while SAC+MPC still consumes $1864.6 \pm 74.6$~kWh with $3.431 \pm 0.294$ violations. These results indicate that standard unimodal actor policies, even when aided by expert regularization, remain poorly matched to the strongly coupled multi-zone HVAC control problem.
-
-\begin{figure}[t]
+\begin{figure}[!t]
 \centering
-\includegraphics[width=\linewidth]{\resultfigdir/compare_reward_curves.pdf}
-\caption{Test reward curves during training. Curves show the three-seed mean and the shaded bands denote $\pm 1$ standard deviation. Higher is better.}
-\label{fig:reward_curves}
+\includegraphics[width=\linewidth]{\resultfigdir/compare_energy_violations.pdf}
+\caption{Energy--comfort Pareto comparison. Points show three-seed means and error bars show one standard deviation. SAC and SAC+MPC are omitted for scale clarity.}
+\label{fig:energy_violations}
 \end{figure}
 
 \subsection{Training Dynamics and Optimization Stability}
 
-The three-seed reward curves in Fig.~\ref{fig:reward_curves} reveal a noticeable difference in optimization stability. Guided-DiffFNO and DiffFNO w/o Residual form the two strongest trajectories overall, with Guided-DiffFNO finishing at the highest mean reward and maintaining a narrow terminal band. The guided full model therefore combines strong final performance with low seed-to-seed variability, which is consistent with the small standard deviations reported in Table~\ref{tab:overall_results}.
+Figure~\ref{fig:reward_curves} shows that Guided-DiffFNO and DiffFNO w/o Residual form the strongest training trajectories, with Guided-DiffFNO reaching the best final reward and maintaining the narrowest terminal band. The unguided DiffFNO variants oscillate more and finish lower, while Diffusion-MLP and SAC+MPC do not sustain their stronger imitation-driven early phase. This suggests that structured diffusion plus critic guidance stabilizes long-horizon improvement more effectively than unguided denoising or conventional actor--critic training on this task.
 
-By contrast, the unguided DiffFNO variants exhibit visibly larger oscillations and wider seed spread, and both finish significantly worse than the guided model. Diffusion-MLP and SAC+MPC each benefit from a relatively strong imitation-driven early phase, but neither sustains that level during later training, and both end well below the guided FNO variants. This behavior suggests that imitation alone is insufficient to stabilize long-horizon policy improvement unless the policy class itself can preserve a structured action prior. Pure SAC is unstable throughout and never enters the reward regime reached by the diffusion-based methods.
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\linewidth]{\resultfigdir/compare_reward_curves.pdf}
+\caption{Test reward curves during training. Curves show the three-seed mean and the shaded bands denote $\pm 1$ standard deviation.}
+\label{fig:reward_curves}
+\end{figure}
 
-These results suggest that the combination of diffusion-based action modeling, FNO-induced structural bias, and inference-time critic refinement leads to a more favorable optimization behavior than conventional actor-critic training or unguided denoising alone on this benchmark.
+\subsection{Mechanism Validation of Critic Guidance}
 
-\begin{figure}[t]
+Figure~\ref{fig:q_mc_return} tests whether the critic provides a meaningful guidance signal by comparing critic-estimated $Q(s,a)$ with Monte Carlo return on logged evaluation samples. The positive association ($r=0.619$, $\rho=0.638$, $N=504$) does not imply perfect calibration, but it does show that the critic preserves a useful ranking of better and worse actions. Together with the performance gap over unguided DiffFNO, this supports the interpretation of critic guidance as an effective inference-time refinement mechanism.
+
+\begin{figure}[!t]
 \centering
 \includegraphics[width=0.88\linewidth]{\resultfigdir/critic_q_mc_return.pdf}
 \caption{Relation between critic-estimated $Q(s,a)$ and Monte Carlo return for Guided-DiffFNO, computed from logged evaluation transitions of the representative seed.}
 \label{fig:q_mc_return}
 \end{figure}
 
-\subsection{Mechanism Validation of Critic Guidance}
+\subsection{Action Quality and Physical Consistency}
 
-Because the proposed guidance term is derived from the critic gradient, it is important to verify that the critic provides a meaningful value signal rather than an arbitrary directional perturbation. Figure~\ref{fig:q_mc_return} addresses this point by plotting the critic-estimated $Q(s,a)$ against the corresponding Monte Carlo return on logged evaluation samples from the representative Guided-DiffFNO seed used in the figure. The two quantities exhibit a clear positive association, with Pearson correlation $r=0.619$ and Spearman rank correlation $\rho=0.638$ over $N=504$ state--action pairs.
-
-This result should not be interpreted as perfect critic calibration; such a claim would be too strong for an off-policy continuous-control setting. However, it does show that the learned critic preserves a useful ranking relationship between actions with lower and higher long-term return. From the perspective of guided diffusion, this is the relevant property: the critic does not need to provide an exact return estimator at every point in action space, but it does need to induce gradients that tend to move the denoising process toward higher-value regions. The improvement of Guided-DiffFNO over unguided DiffFNO in both reward and comfort violations, together with the positive $Q$--return relation in Fig.~\ref{fig:q_mc_return}, therefore supports the interpretation that critic guidance serves as a useful inference-time refinement mechanism within the present ablation setting.
-
-\begin{figure*}[t]
+\begin{figure}[!t]
 \centering
 \subfloat[Distribution of mean absolute action changes.\label{fig:action_smoothness_subfig}]{
-\includegraphics[width=0.47\textwidth]{\resultfigdir/compare_action_smoothness.pdf}}
-\hfill
+\includegraphics[width=\linewidth]{\resultfigdir/compare_action_smoothness.pdf}}\\[2pt]
 \subfloat[Welch power spectral density (PSD) of generated normalized action coordinates.\label{fig:action_psd_subfig}]{
-\includegraphics[width=0.47\textwidth]{\resultfigdir/action_psd_compare.pdf}}
-\caption{Action-quality analysis for the learned controllers. The left panel reports the same smoothness metric as Table~\ref{tab:overall_results}, restricted here to the learned controllers and aggregated over the evaluation trajectories from all three seeds. The right panel visualizes the corresponding seed-averaged frequency-domain distribution of generated control signals in normalized action coordinates, with the shaded bands indicating $\pm 1$ standard deviation.}
+\includegraphics[width=\linewidth]{\resultfigdir/action_psd_compare.pdf}}
+\caption{Action-quality analysis for the learned controllers. Left: mean absolute action change across evaluation trajectories. Right: seed-averaged PSD of normalized action coordinates.}
 \label{fig:action_quality}
-\end{figure*}
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=\linewidth]{\resultfigdir/smalloffice_physical_psd_compare.pdf}
-\caption{HVAC power spectral density on OfficeSmall for the physical MPC controller, Guided-DiffFNO, and Diffusion-MLP. Unlike Fig.~\ref{fig:action_quality}, which analyzes normalized action coordinates, this figure is computed from the resulting HVAC power delivered to the building. The learned-policy curves use the three-seed aggregate, whereas MPC is deterministic. The dashed vertical line marks the $2$ cycles/day cutoff used to separate low- and high-frequency components. Under this definition, the low-frequency mass ratio is $95.2\%$ for physical MPC, $89.0\%$ for Guided-DiffFNO, and $73.7\%$ for Diffusion-MLP.}
-\label{fig:physical_psd_compare}
 \end{figure}
 
-\begin{figure}[t]
+Beyond scalar reward and energy metrics, Guided-DiffFNO also produces smoother and more physically consistent control trajectories. In Fig.~\ref{fig:action_quality}, its mean absolute action change is $0.0236 \pm 0.0005$, essentially tied with DiffFNO w/o Residual and substantially lower than unguided DiffFNO ($0.0402 \pm 0.0090$), Diffusion-MLP ($0.0596 \pm 0.0162$), SAC+MPC ($0.1729 \pm 0.0117$), and SAC ($0.3430 \pm 0.0412$). The representative 72-hour coordination window in Fig.~\ref{fig:multizone_coordination} is consistent with this trend: Guided-DiffFNO shows strong but non-collapsed coordination across zones, with mean pairwise correlation $0.969$ and mean cross-zone standard deviation $0.015$, compared with $0.905/0.032$ for unguided DiffFNO and $0.560/0.061$ for Diffusion-MLP. The unguided FNO variant therefore already preserves substantial cross-zone coherence, but the guided full model remains more synchronized and less spatially dispersed, while the MLP baseline is clearly less coordinated.
+
+\begin{figure}[!t]
 \centering
 \includegraphics[width=\linewidth]{\resultfigdir/multizone_action_coordination.pdf}
-\caption{Multi-zone action coordination over a representative 72-hour window from the canonical seed for Guided-DiffFNO, DiffFNO w/o Guidance, and Diffusion-MLP. Guided-DiffFNO exhibits the highest inter-zone consistency among the three while preserving meaningful zone-to-zone variation.}
+\caption{Representative 72-hour multi-zone action coordination for Guided-DiffFNO, DiffFNO w/o Guidance, and Diffusion-MLP.}
 \label{fig:multizone_coordination}
 \end{figure}
 
-\begin{figure*}[t]
+The spectral analysis leads to the same conclusion. Using a $2$ cycles/day cutoff on the discrete Welch spectrum, Guided-DiffFNO allocates $13.3\%$ of its action-spectrum mass to the high-frequency region, versus $27.9\%$ for unguided DiffFNO and $40.2\%$ for Diffusion-MLP. On the resulting HVAC power signal, the corresponding low-frequency mass ratios are $89.0\%$ for Guided-DiffFNO, $95.2\%$ for physical MPC, and $73.7\%$ for Diffusion-MLP. The learned policy therefore moves substantially closer to the low-frequency operating pattern of MPC while still achieving a better energy--comfort trade-off.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\linewidth]{\resultfigdir/smalloffice_physical_psd_compare.pdf}
+\caption{HVAC power spectral density for physical MPC, Guided-DiffFNO, and Diffusion-MLP. The dashed line marks the $2$ cycles/day cutoff.}
+\label{fig:physical_psd_compare}
+\end{figure}
+
+The room-level trajectories in Fig.~\ref{fig:traj_control} provide a local illustration of the same pattern. Over the selected 72-hour window, Guided-DiffFNO leaves the comfort band only $3$ times, versus $12$ for unguided DiffFNO, and its room-wise action variation remains much smaller than that of Diffusion-MLP and SAC. The severe temperature excursions produced by SAC again indicate that standard point-estimate policies are poorly matched to this coupled control problem.
+
+\begin{figure}[!t]
 \centering
 \subfloat[Temperature evolution for the selected room under Guided-DiffFNO and unguided DiffFNO.\label{fig:traj_temp_subfig}]{
-\includegraphics[width=0.47\textwidth]{\resultfigdir/temperature_trajectories_paper.pdf}}
-\hfill
+\includegraphics[width=\linewidth]{\resultfigdir/temperature_trajectories_paper.pdf}}\\[2pt]
 \subfloat[Control sequences for the same room generated by Guided-DiffFNO, Diffusion-MLP, and SAC.\label{fig:traj_control_subfig}]{
-\includegraphics[width=0.47\textwidth]{\resultfigdir/control_sequence_paper.pdf}}
-\caption{Representative room-level trajectories over the selected 72-hour evaluation window from the canonical seed. The left panel shows temperature regulation near the comfort band, and the right panel compares the corresponding control sequences.}
+\includegraphics[width=\linewidth]{\resultfigdir/control_sequence_paper.pdf}}
+\caption{Representative room-level trajectories over the selected 72-hour evaluation window.}
 \label{fig:traj_control}
-\end{figure*}
-
-\subsection{Action Quality and Physical Consistency}
-
-Beyond scalar reward and energy metrics, the proposed method also produces smoother and more physically consistent control trajectories. As shown in Fig.~\ref{fig:action_quality}, Guided-DiffFNO is essentially tied with the no-residual guided variant for the lowest action-variation level among the evaluated learned controllers, with three-seed mean absolute action change $0.0236 \pm 0.0005$ versus $0.0237 \pm 0.0005$. This is much lower than unguided DiffFNO ($0.0402 \pm 0.0090$), Diffusion-MLP ($0.0596 \pm 0.0162$), SAC+MPC ($0.1729 \pm 0.0117$), and SAC ($0.3430 \pm 0.0412$). For reference, the physical MPC baseline is smoother still in Table~\ref{tab:overall_results}, with mean absolute action change $0.0130$, but it also consumes more energy and incurs substantially more comfort violations than Guided-DiffFNO. Relative to Diffusion-MLP, the full model reduces mean action variation by $60.4\%$, while also exhibiting very small seed-to-seed spread. This is consistent with the view that the proposed structured generative policy suppresses control chatter in the joint action space while retaining a more favorable overall energy--comfort balance than the physical MPC reference.
-
-Because Fig.~\ref{fig:multizone_coordination} and Fig.~\ref{fig:traj_control} are representative 72-hour windows rather than seed-averaged trajectories, the correlation and time-domain numbers reported below refer to the canonical seed used for visualization. Figure~\ref{fig:multizone_coordination} provides a useful visualization of the cross-zone coordination claim that motivates the FNO backbone. This figure is particularly important because the single-room trajectories in Fig.~\ref{fig:traj_control} alone could otherwise be interpreted as a representative but potentially cherry-picked local example. Over the same 72-hour window, the six zone actions generated by Guided-DiffFNO evolve in a highly synchronized manner, with mean pairwise inter-zone correlation $0.969$ and mean cross-zone standard deviation $0.015$. The high correlation should not be interpreted as the policy collapsing all zone commands to an identical scalar profile. Rather, it indicates that different zones respond coherently to the same global disturbances and operating rhythm, such as weather and daily load cycles, while still retaining nonzero zone-specific variation. This remaining differentiation is reflected by the nonzero cross-zone standard deviation, which stays at $0.015$ for Guided-DiffFNO and is substantially smaller than the $0.073$ observed for Diffusion-MLP.
-
-Importantly, adding DiffFNO w/o Guidance to the same visualization clarifies that the structural benefit is not created by the MLP baseline alone. The unguided DiffFNO baseline exhibits only moderate inter-zone coordination, with mean pairwise correlation $0.620$ and mean cross-zone standard deviation $0.054$. It therefore remains more structured than Diffusion-MLP, but still falls short of the guided model. This three-way comparison suggests a more precise interpretation of the method components: the FNO backbone provides a useful structural prior beyond MLP, while critic guidance further sharpens cross-zone coherence and improves the final energy--comfort trade-off.
-
-In contrast, Diffusion-MLP still exhibits weaker agreement across zones, with mean pairwise correlation only $0.437$. This comparison is consistent with the structural hypothesis of the paper: the FNO-based policy is not merely smoother in a generic sense, but appears better able to produce joint control vectors that remain globally coherent across coupled thermal zones without degenerating to identical outputs.
-
-The frequency-domain analysis further supports this conclusion. The two PSD figures in this section are intentionally defined on different signals: Fig.~\ref{fig:action_quality} analyzes the normalized action coordinates produced by the learned policies, whereas Fig.~\ref{fig:physical_psd_compare} analyzes the resulting HVAC power delivered to the building. We focus the PSD comparison in Fig.~\ref{fig:action_quality} on the learned controllers because its primary role is to examine whether the proposed generative policy suppresses high-frequency chatter relative to alternative learned policies. A direct comparison with MPC in this panel would be less interpretable because the learned policies act through normalized control coordinates, whereas MPC is more naturally interpreted through the resulting physical actuation delivered to the building. We therefore use Fig.~\ref{fig:action_quality} to diagnose internal action smoothness among learned controllers, and Fig.~\ref{fig:physical_psd_compare} to compare the corresponding closed-loop HVAC power spectrum against a physical MPC reference. In the PSD panel of Fig.~\ref{fig:action_quality}\cite{welch1967use}, the spectra are computed from logged evaluation trajectories using sampling frequency $f_s=1/3600$ Hz (one control step per hour), Welch window length $n_{\mathrm{seg}}=64$, and overlap $32$. Let $S_j(f_m)$ denote the discrete Welch spectrum of control dimension $j$ at frequency bin $f_m$, and let $S(f_m)=\frac{1}{6}\sum_{j=1}^{6}S_j(f_m)$ denote the corresponding cross-zone average shown in the figure. Because the stored PSD is discrete rather than continuous, the reported high-frequency ratio is computed by the same discrete summation used in the figure post-processing:
-\begin{equation}
-\rho_{\mathrm{HF}}=\frac{\sum_{m:\,f_m>2\ \mathrm{cpd}} S(f_m)}{\sum_{m=1}^{M} S(f_m)},
-\label{eq:hf_ratio}
-\end{equation}
-where ``cpd'' denotes cycles per day. Under the hourly control interval, the cutoff of $2$ cycles/day corresponds to oscillations faster than one cycle every 12 hours. We use this threshold as an explicit analysis convention in this paper to distinguish daily or slower actuation structure from visibly faster control chatter; it should therefore be interpreted as an operational cutoff for comparing policies, rather than as a universal physical constant. With this discrete definition, Guided-DiffFNO allocates $13.3\%$ of its spectral mass to the high-frequency region, compared with $27.9\%$ for unguided DiffFNO and $40.2\%$ for Diffusion-MLP. All learned methods still exhibit a dominant spectral peak around $1.125$ cycles/day, which is consistent with the daily rhythm of building thermal disturbances. Therefore, the proposed approach does not appear to remove the meaningful low-frequency control structure associated with building operation; instead, it mainly suppresses spurious high-frequency oscillations that are unlikely to be physically desirable.
-
-Figure~\ref{fig:physical_psd_compare} complements the learned-policy action-spectrum comparison in Fig.~\ref{fig:action_quality} by examining the HVAC power spectrum against a physical MPC reference. For this physical signal, we analogously define the low-frequency power ratio
-\begin{equation}
-\rho_{\mathrm{LF}}^{\mathrm{power}}=\frac{\sum_{m:\,f_m\le 2\ \mathrm{cpd}} P(f_m)}{\sum_{m=1}^{M} P(f_m)},
-\end{equation}
-where $P(f_m)$ denotes the discrete HVAC-power spectrum shown in Fig.~\ref{fig:physical_psd_compare}. The resulting ratio is $95.2\%$ for physical MPC, $89.0\%$ for Guided-DiffFNO, and $73.7\%$ for Diffusion-MLP. Thus, Guided-DiffFNO not only outperforms the MLP baseline in a relative learned-policy comparison, but also yields an HVAC power trajectory that is noticeably closer to the low-frequency operating pattern produced by MPC. This comparison is complementary rather than redundant: Fig.~\ref{fig:action_quality} shows that the learned action sequence itself contains less high-frequency chatter, while Fig.~\ref{fig:physical_psd_compare} shows that the resulting physical actuation delivered to the building is also more MPC-like in frequency content. At the same time, a nonzero gap remains between Guided-DiffFNO and MPC, which is consistent with the fact that the learned policy is still optimizing a stochastic long-horizon objective rather than explicitly solving a receding-horizon optimization problem at each step.
-
-The time-domain trajectories in Fig.~\ref{fig:traj_control} provide a concrete room-level illustration of the same behavior. Over the representative evaluation window, the selected room under Guided-DiffFNO leaves the comfort band only $3$ times out of $72$ control steps, whereas the unguided DiffFNO leaves the band $12$ times. In the same window, the room-wise action sequence generated by Guided-DiffFNO has mean step-to-step variation $0.0215$, compared with $0.0548$ for unguided DiffFNO, $0.1285$ for Diffusion-MLP, and $0.3196$ for SAC. Diffusion-MLP also incurs $10$ comfort-band exits over the same window, so the representative room view is consistent with, rather than contradictory to, the aggregate building-level metrics. SAC again exhibits extreme temperature excursions, with the selected-room state ranging from $0.78^\circ$C to $40.16^\circ$C. These values should be interpreted as raw simulator state outputs under destabilizing control inputs after the closed-loop system has left the normal operating regime, rather than as realistic occupied-zone temperatures in a physically meaningful HVAC trajectory. In other words, they are evidence of severe control-induced instability in the simulator response, which is precisely why we use them as a symptom of poor physical consistency.
-
-Taken together, these results support the broader design motivation of this paper: for multi-zone HVAC control, a good policy should not only optimize aggregate reward, but should also generate coordinated joint actions whose temporal and spectral characteristics remain compatible with the physics of coupled building dynamics.
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=\linewidth]{\resultfigdir/ablation_summary_heatmap.pdf}
-\caption{Normalized ablation summary across energy, comfort, smoothness, and convergence. Each column is min--max normalized across the five ablation variants only: Guided-DiffFNO, DiffFNO w/o Guidance, DiffFNO w/o Residual \& Guidance, DiffFNO w/o Residual, and Diffusion-MLP. Here the smoothness axis uses mean squared action increment as an auxiliary normalized diagnostic, whereas Table~\ref{tab:overall_results} reports mean absolute action change as the primary interpretable smoothness metric used for all absolute comparisons in the text. For energy and smoothness, the raw metrics are inverted before normalization so that higher values are always better. Thus, $1.00$ denotes the best ablation model on that metric and $0.00$ denotes the worst one within the ablation set, rather than a manually assigned absolute score.}
-\label{fig:ablation_heatmap}
 \end{figure}
 
 \subsection{Ablation Analysis}
 
-Figure~\ref{fig:ablation_heatmap} and Table~\ref{tab:overall_results} clarify the role of each component in Guided-DiffFNO.
+Figure~\ref{fig:ablation_heatmap} and Table~\ref{tab:overall_results} clarify the role of each component. The heatmap uses column-wise min--max normalization across the five ablation variants only; its smoothness axis is based on mean squared action increment, whereas absolute smoothness comparisons in the text use mean absolute action change.
 
-To avoid ambiguity, the normalized scores in Fig.~\ref{fig:ablation_heatmap} are not absolute performance values. They are computed by column-wise min--max normalization over the five ablation variants only. Specifically, energy uses the average episode HVAC energy, comfort uses the comfort satisfaction rate $1-\text{violations}/(T\times N)$, smoothness uses the mean squared action increment, and convergence uses the area under the test-reward curve. The smoothness definition in this heatmap is therefore different from the mean absolute action change reported in Table~\ref{tab:overall_results}; we use the squared-increment form here only as an auxiliary within-ablation diagnostic that is more sensitive to occasional large control jumps. Accordingly, all absolute smoothness statements in this section refer to the mean absolute action change metric in Table~\ref{tab:overall_results}. For metrics where smaller raw values are better, namely energy and smoothness, we first reverse the direction and then apply min--max scaling. Consequently, a value of $0.00$ means that a method is the lowest-performing one on that metric within the ablation set, while $1.00$ means that it is the strongest one. The fact that Diffusion-MLP appears as $0.00$ on all four axes therefore indicates that it is the weakest ablation baseline under this normalization, not that it was artificially fixed as a reference lower bound.
+Replacing the MLP denoiser with the FNO backbone already yields a clear gain in energy, comfort, and smoothness. Adding critic guidance further improves energy by $3.3\%$ and violations by $43.6\%$ relative to unguided DiffFNO, supporting the claim that guidance steers sampling toward safer and higher-value regions. Removing the residual branch keeps the controller smooth but slightly worsens comfort and reward, indicating that the residual pathway mainly restores local flexibility near comfort boundaries. Overall, the three components play complementary roles: FNO contributes structural smoothness, critic guidance contributes value alignment, and the residual branch improves local adaptability.
 
-First, replacing the conventional MLP denoiser with the FNO backbone still yields a substantial gain in action quality. Comparing the three-seed means of Diffusion-MLP and DiffFNO w/o Guidance, energy decreases from $990.9$~kWh to $901.3$~kWh, violations decrease from $1.441$ to $0.886$, and mean action variation drops from $0.0596$ to $0.0402$. The gains are most visible in comfort and smoothness rather than in raw energy alone, which is consistent with a spectral backbone that directly models cross-zone action structure rather than treating each action dimension independently.
-
-Second, critic guidance during reverse sampling appears to be an important factor behind the comfort improvement and the stronger cross-zone coherence. Comparing Guided-DiffFNO with DiffFNO w/o Guidance, the mean action smoothness improves by $41.3\%$, violations drop by $43.6\%$, and energy also improves by $3.3\%$. This suggests that guidance is not simply a cosmetic refinement at the final action stage; it changes the denoising trajectory in a way that biases sampling toward safer and higher-value regions on this benchmark.
-
-Third, the residual pathway appears to mainly improve local controllability and the final energy--comfort balance. Removing the residual branch while keeping guidance leads to slightly lower energy ($867.8$~kWh) but worse comfort ($0.614$ violations) and lower reward ($-0.558$), while leaving smoothness essentially unchanged ($0.0236$ versus $0.0237$). In other words, the residual connection does not appear to be the main source of smoothness, because the spectral branch already provides much of that property; instead, it helps recover enough local flexibility to correct room-specific errors near the comfort boundary.
-
-Overall, the ablation results are broadly consistent with the proposed method design: the FNO backbone contributes structural smoothness, critic guidance contributes value alignment and safety-aware refinement, and the residual branch recovers local adaptability. Their combination appears to yield a comparatively well-balanced controller in the present benchmark setting.
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\linewidth]{\resultfigdir/ablation_summary_heatmap.pdf}
+\caption{Normalized ablation summary across energy, comfort, smoothness, and convergence. Each column is min--max normalized over the five ablation variants.}
+\label{fig:ablation_heatmap}
+\end{figure}
 
 \subsection{Discussion}
 
-From a control perspective, the experimental evidence suggests that the advantage of Guided-DiffFNO does not come from a single metric-specific trick. Instead, it appears to come from a closer match between the policy class and the underlying problem structure. Multi-zone HVAC control is a coupled, safety-sensitive, and distributionally multi-modal decision problem. Under this view, point-estimate policies such as SAC are limited because they cannot represent diverse but coordinated action patterns; Diffusion-MLP is limited because it lacks an explicit inductive bias for cross-zone structure; and unguided diffusion remains incomplete because distributional plausibility does not guarantee value-optimality. Guided-DiffFNO addresses these three issues jointly, which helps explain why it achieves a favorable compromise among energy efficiency, comfort preservation, convergence behavior, and action smoothness in this task.
+From a control perspective, the main advantage of Guided-DiffFNO appears to be a better match between policy class and problem structure. Multi-zone HVAC control is coupled, safety-sensitive, and potentially multi-modal; SAC lacks expressive joint-action modeling, Diffusion-MLP lacks an explicit structural prior, and unguided diffusion lacks value-aware refinement. Guided-DiffFNO addresses these limitations jointly, which helps explain its more favorable compromise among energy, comfort, convergence, and smoothness.
 
+An important nuance, however, is that the full model does not dominate every scalar criterion in isolation. Table~\ref{tab:overall_results} shows that DiffFNO w/o Residual attains slightly lower raw energy, and MPC remains the smoothest controller under the mean-$|\Delta a|$ metric. The benefit of the full model is therefore better understood as a stronger overall \emph{balance} across competing objectives. Consistent with the ablations and the spectral analyses, the FNO backbone mainly contributes a structured prior for coordinated low-frequency joint actions, whereas critic guidance improves value alignment and comfort compliance by steering sampling toward better action regions. The residual branch then preserves local flexibility near comfort boundaries, which helps explain why the full model achieves the most favorable overall energy--comfort compromise without uniformly dominating every baseline in every metric.
 
+At the same time, the present study has clear boundaries. All experiments are conducted on one BEAR building configuration under one hot-dry climate profile and an hourly control interval. The conclusions are therefore about the value of structured generative policies in this benchmarked setting, not yet about universal superiority across building types, climates, or actuation frequencies. In addition, critic guidance should not be interpreted as a hard safety mechanism. Because the guidance signal is learned from reward, it can improve comfort compliance empirically, but it does not enforce explicit temperature constraints in the way a certified safety filter or a constrained optimizer would. The current framework also relies on MPC demonstrations for early stabilization, which is practical in many building studies but may become more restrictive when expert data are scarce or when the expert itself is misspecified.
 
-
-
-
+These limitations suggest several concrete next steps. A first direction is broader external validation across buildings, climates, and occupancy patterns to determine when the structural prior transfers and when it should become graph- or topology-aware. A second direction is to integrate explicit safety mechanisms, for example constraint projection, shielding, or uncertainty-aware guidance, so that value-guided diffusion can be combined with formal comfort guarantees. A third direction is to study shorter control intervals and partial observability, where the interaction among diffusion depth, inference latency, and real-time deployment becomes more consequential. Even in its current form, however, the method illustrates a useful principle for building control: when the action space itself has meaningful physical structure, policy architectures that encode that structure can produce gains that are difficult to obtain through reward engineering or baseline scaling alone.
 
 \section{Conclusion}
 \label{sec:conclusion}
 
-This paper proposed Guided-DiffFNO, a generative reinforcement learning framework for multi-zone building HVAC control. The method was designed from a simple premise: in a thermally coupled building, the controller should generate a coordinated joint action over all zones rather than independent point-wise commands. To operationalize this idea, we combined three components in a unified policy-learning framework: a conditional diffusion policy to model complex continuous action distributions, an FNO-based denoising backbone to encode cross-zone structure directly in the action space, and an inference-time critic guidance mechanism to refine sampled actions using value gradients during reverse diffusion.
+This paper proposed Guided-DiffFNO, a generative RL framework for multi-zone HVAC control that combines conditional diffusion, an FNO denoiser over the joint action vector, and inference-time critic guidance. On the BEAR \emph{OfficeSmall-Hot\_Dry} benchmark, the method achieves the best overall energy--comfort balance among the compared methods, with the lowest comfort violations, the highest final test reward, and smoother, more coordinated control trajectories than the alternative learned policies studied here.
 
-On the BEAR \emph{OfficeSmall-Hot\_Dry} benchmark, the three-seed results show that Guided-DiffFNO achieves a particularly strong overall energy--comfort balance among the compared methods evaluated here, attaining the lowest violation level and the highest final test reward while maintaining low HVAC energy consumption. Beyond scalar performance, it also produces smoother and more physically consistent control trajectories, including lower action variation, stronger cross-zone coordination, lower high-frequency spectral mass than the alternative learned policies analyzed here, and an HVAC power spectrum that moves noticeably closer to the low-frequency profile of the physical MPC controller.
-
-The ablation and mechanism analyses support a more specific interpretation of why the method works. The FNO backbone provides the structural prior that improves comfort and suppresses action jitter relative to an MLP diffusion policy, critic guidance during reverse sampling appears to play an important role in the observed gains in comfort compliance, coordination quality, and value alignment, and the residual branch helps recover enough local flexibility near comfort boundaries. In this sense, the main contribution of the paper is not merely a better score on one benchmark, but an empirical demonstration that generative action modeling, structural inductive bias, and inference-time value refinement can be combined in a coherent way for multi-zone HVAC control.
-
-At the same time, the present conclusions should be interpreted at the scale actually studied here: a fixed simulator benchmark and the reported OfficeSmall configuration. Several directions therefore remain open. First, broader validation across additional buildings, climates, disturbance profiles, and larger seed sets is still needed to determine how stable the observed gains are beyond the current setting. Second, critic guidance should still be understood as value-guided refinement rather than as a formal hard-constraint guarantee; combining it with explicit constraint handling or safety shielding would be a natural next step. Third, extending the current single-step joint-action formulation to longer-horizon generative planning may better capture delayed thermal effects. Finally, moving from simulation to real deployment will require addressing model mismatch, sensing uncertainty, and online adaptation.
-
-
-
-
-
-
-
+The ablation and mechanism studies suggest that the method works because its components are complementary: the FNO backbone improves structural smoothness, critic guidance improves value alignment and comfort compliance, and the residual branch preserves local flexibility. At the same time, the present conclusions remain bounded by the current simulator benchmark and OfficeSmall configuration. Broader validation across additional buildings and climates, stronger safety mechanisms, longer-horizon generative planning, and eventual deployment under model mismatch remain important future directions.
 \bibliographystyle{IEEEtran}
 \bibliography{references.bib}
 
