@@ -1,0 +1,27 @@
+{
+  "building_type": "OfficeSmall",
+  "weather_type": "Hot_Dry",
+  "location": "Tucson",
+  "episode_length": 168,
+  "time_resolution_s": 3600,
+  "low_freq_cpd": 2.0,
+  "low_freq_ratio": {
+    "physical_mpc": 0.9524555482934236,
+    "difffno": 0.8261940075983568,
+    "diffusion_mlp": 0.7372824495495645
+  },
+  "main_run_dir": "diffusion_fno_guided_bcfix_clean_OfficeSmall_Hot_Dry_20260403_085019_\u5c0f_\u65e0\u5f15\u5bfc100\u4e07\u6b65",
+  "mlp_run_dir": "diffusion_mlp_bcfix_clean_OfficeSmall_Hot_Dry_20260406_140006",
+  "main_run_dirs": [
+    "diffusion_fno_guided_bcfix_clean_OfficeSmall_Hot_Dry_20260403_085019_\u5c0f_\u65e0\u5f15\u5bfc100\u4e07\u6b65",
+    "diffusion_fno_guided_bcfix_clean_OfficeSmall_Hot_Dry_20260412_163742__noguide_seed0",
+    "diffusion_fno_guided_bcfix_clean_OfficeSmall_Hot_Dry_20260417_152156__noguide_seed1"
+  ],
+  "mlp_run_dirs": [
+    "diffusion_mlp_bcfix_clean_OfficeSmall_Hot_Dry_20260406_140006",
+    "diffusion_mlp_bcfix_clean_OfficeSmall_Hot_Dry_20260415_100054__mlp_seed0",
+    "diffusion_mlp_bcfix_clean_OfficeSmall_Hot_Dry_20260420_022234__mlp_seed1"
+  ],
+  "aggregate_seeds": true,
+  "notes": "Conference-oriented PSD comparison with no-guidance DiffFNO as the main method."
+}
