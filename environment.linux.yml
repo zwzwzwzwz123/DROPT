@@ -1,9 +1,0 @@
-﻿name: dropt
-channels:
-  - conda-forge
-  - defaults
-dependencies:
-  - python=3.10.19
-  - pip=25.2
-  - pip:
-      - -r requirements.linux.txt

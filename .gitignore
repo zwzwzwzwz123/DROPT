@@ -93,6 +93,13 @@ celerybeat.pid
 # Environments
 .env
 .venv
+.venv*/
+.venv_sinergym/
+
+# Sinergym / EnergyPlus 运行输出
+Eplus-*-res*/
+Eplus-env-*/
+*-res[0-9]*/
 # env/  # ❌ 注释掉！这会忽略项目的 env/ 源代码目录
 venv/
 # ENV/  # ❌ 注释掉！Windows 不区分大小写，会匹配 env/
