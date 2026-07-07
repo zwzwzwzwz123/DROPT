@@ -1,0 +1,675 @@
+===== PAGE 1 =====
+DiffFNO: Fourier-Structured Diffusion Control for
+IoT-Enabled Building Energy Management
+Wei Zou, Zongwei Han, Bo Cheng, Yu Sun, Jingbo Liu, Zongyi Liu, and Haibo Zhou
+School of Electronic Science and Engineering, Nanjing University, Nanjing, China, 210023
+Emails: {weizou,502025230079,bocheng,yusun,zongyiliu}@smail.nju.edu.cn, {jingboliu,haibozhou}@nju.edu.cn
+Abstract—Internet of Things (IoT) sensor networks enable
+real-time thermal monitoring and control command delivery,
+making data-driven heating, ventilation, and air conditioning
+(HV AC) optimization promising for building energy management.
+However, IoT-enabled building energy management remains
+challenging because real-time sensor streams must be converted
+into coordinated control actions that balance energy saving and
+comfort compliance under coupled thermal dynamics. Legacy
+reinforcement learning policies often rely on restrictive unimodal
+action models, multilayer perceptron (MLP)-based policies do not
+explicitly model zone-wise coordination, and standard learned
+policies may produce oscillatory actions that reduce control
+smoothness and weaken physical consistency. To this end, we
+present DiffFNO, a generative controller for IoT-enabled building
+energy management that integrates a conditional diffusion policy,
+an action-dimensional Fourier neural operator (FNO) denoiser,
+and a residual correction pathway. Simulation results on the
+Physics-Principled Building Environment for Control and Re-
+inforcement Learning (BEAR) OfficeSmall-Hot Dry benchmark
+demonstrate its effectiveness in improving the energy–comfort
+trade-off and producing smoother, more physically consistent
+control signals. Ablation studies further support the contribution
+of the residual pathway, suggesting the potential of DiffFNO for
+IoT-enabled building energy management.
+Index Terms —IoT-enabled building energy management,
+HV AC optimization, diffusion control, Fourier neural operator,
+reinforcement learning.
+I. I NTRODUCTION
+Buildings account for a substantial portion of global energy
+consumption, and heating, ventilation, and air conditioning
+(HV AC) systems are among the largest controllable contribu-
+tors to operational energy use [1], [2]. In Internet of Things
+(IoT)-enabled buildings, distributed sensors continuously mon-
+itor zone temperatures, outdoor conditions, solar irradiance,
+and occupancy-related loads. These measurements are aggre-
+gated through gateway nodes and fed into the controller at
+each decision step. Recent IoT and industrial IoT studies have
+also emphasized that sensing-data aggregation, information
+freshness, and edge-side processing are central to reliable
+closed-loop services [3], [4]. The resulting control actions are
+then applied to zone-level HV AC actuators through the same
+IoT infrastructure, forming the sensing–actuation loop. This
+closed-loop digital infrastructure makes data-driven HV AC
+control increasingly relevant for large commercial buildings.
+In occupied buildings, persistent thermal-comfort violations
+are not merely a secondary penalty. They directly affect
+whether an energy-saving controller is acceptable to occupants
+and facility operators. Repeated comfort-band violations can
+lead to occupant discomfort, manual override of automated
+control actions, and loss of deployment trust. Energy efficiency
+is therefore best viewed as a constrained operating objective: a
+controller that saves energy by tolerating chronic overheating
+or overcooling is not practically deployable. This perspective
+motivates treating comfort violations as a primary evaluation
+criterion alongside energy consumption.
+Recent reinforcement learning (RL) approaches provide
+a model-free alternative to rule-based control and model
+predictive control (MPC), but standard policies remain mis-
+matched to multi-zone HV AC control in three ways [5]–
+[8]. First, many continuous-control methods use deterministic
+mappings or unimodal Gaussian action distributions, which
+are too restrictive when multiple coordinated control patterns
+are feasible under the same thermal state. Second, common
+multilayer perceptron (MLP)-based policies do not explicitly
+encode cross-zone coupling and therefore struggle to capture
+the structured geometry of the joint action vector. Third,
+standard learned policies may produce oscillatory actions that
+reduce control smoothness and weaken physical consistency
+in coupled building systems.
+Diffusion policies offer a more expressive action model for
+continuous control [9]–[11], while Fourier neural operators
+(FNOs) provide a useful spectral prior when low-frequency
+coordination is important [12], [13]. Motivated by these ob-
+servations, we formulate the multi-zone HV AC policy as a
+conditional reverse-diffusion process and replace the standard
+MLP denoiser with an FNO denoiser that acts along the
+action dimension. We further retain a residual pathway so the
+denoiser can preserve coarse spectral coordination while still
+making local corrective adjustments when comfort boundaries
+are tight. Intuitively, the action-dimension axis can be viewed
+as a compact control field over thermal zones: neighboring
+or strongly coupled zones should usually receive coordinated
+commands, while abrupt high-frequency variations across ac-
+tion coordinates often indicate physically inconsistent control.
+This makes an FNO-based spectral prior well aligned with
+multi-zone HV AC actions. The policy class should therefore be
+able to represent multiple feasible joint actions, preserve cross-
+zone consistency, and remain stable under repeated sensor-
+driven updates.
+Unlike conventional building RL policies that predict ac-
+tions coordinate-wise, DiffFNO treats the full multi-zone
+command as a generated object. It also differs from generic
+diffusion control by embedding building-specific action-space
+===== PAGE 2 =====
+Zone 1
+Zone 4
+Zone 2
+Zone 3
+Zone 5
+Zone 6
+zone coupling
+Store
+IoT-Enabled Multi-Zone Building
+Retrieve Data
+Optimization
+Algorithm
+Inputs
+Control
+Gather
+Gateway Node Database
+Zone temperatures
+Outdoor 
+temperature
+Solar irradiance
+Internal loads
+……
+Fig. 1: IoT-enabled sensing–control architecture for multi-zone building HV AC control. Zone-level measurements are gathered by the gateway node, aggregated
+into the state vector st, and fed to the controller, whose joint action is applied back to the building.
+structure through the FNO denoiser and residual correction
+pathway.
+The main contributions of this work are:
+• We propose DiffFNO, a Fourier-structured generative
+controller for IoT-enabled building energy management
+that models the full joint zone action through conditional
+diffusion rather than point-estimate regression.
+• We introduce an FNO denoiser operating along the
+action-dimension axis—treating the joint zone command
+as a control field rather than a temporal sequence—
+together with a gated residual pathway that preserves
+local corrective flexibility near comfort boundaries.
+• We show on the Physics-Principled Building Environment
+for Control and Reinforcement Learning (BEAR) bench-
+mark that DiffFNO improves the energy–comfort profile
+over Diffusion-MLP, and that removing the residual path-
+way yields lower energy and smoother actions only at the
+cost of increased comfort violations.
+The remainder of this paper is organized as follows. Sec-
+tion II introduces the multi-zone HV AC control model. Sec-
+tion III presents the proposed DiffFNO framework. Section IV
+reports the experimental setup and results. Finally, Section V
+concludes the paper and discusses future extensions.
+II. S YSTEM MODEL
+We consider an IoT-enabled multi-zone HV AC control task
+in which a supervisory controller maps building-wide sensor
+measurements to coordinated zone-level commands, with the
+objective of reducing energy use while avoiding thermal-
+comfort violations. Figure 1 illustrates the corresponding
+sensing–control loop: zone-level measurements are gathered
+through the gateway node, aggregated into the state vector
+st, and fed to the controller. The resulting joint action is then
+applied back to the zone-level HV AC actuators. Such sensing–
+actuation loops are consistent with recent communication-
+control co-design studies in industrial IoT systems, where
+transmission and control performance are jointly considered
+[14].
+We formulate multi-zone HV AC control as a discounted
+Markov decision process (MDP) M = (S, A, P, r, γ), where
+the transition kernel is induced by the physics-based BEAR
+simulator [15]. The controller interacts with a six-zone office
+building under coupled thermal dynamics, weather distur-
+bances, solar gains, and internal loads. The state vector st
+is constructed from aggregated IoT measurements collected
+across all thermal zones, including zone temperatures, outdoor
+temperature, solar irradiance, ground temperature, and internal
+loads. In Fig. 1, the retrieved-data block highlights the main
+components of st, while the ellipsis denotes additional exoge-
+nous features such as the ground-temperature term. The action
+is a continuous joint HV AC command for all N zones:
+at = [at,1, at,2, . . . , at,N ] ∈ [−1, 1]N , (1)
+so the policy must generate a coordinated multi-zone control
+vector rather than independent per-zone decisions. Because
+the six zones share disturbances and thermal interactions, a
+===== PAGE 3 =====
+command that appears locally beneficial for one zone may still
+be globally inefficient once neighboring temperatures, comfort
+violations, and total HV AC energy are considered jointly.
+The reward combines the simulator reward with an explicit
+thermal-comfort violation penalty:
+dt,i =
+T zone
+t,i − T ref  , V t =
+NX
+i=1
+I(dt,i > δ), (2)
+rt = ρ (renv
+t − λVt) , (3)
+where T ref is the target temperature, δ is the comfort tolerance,
+Vt counts zone-wise temperature violations with respect to
+the comfort band defined by the American Society of Heat-
+ing, Refrigerating and Air-Conditioning Engineers (ASHRAE)
+Standard 55 [16], λ is the violation penalty, and ρ is a reward-
+scaling coefficient. The control objective is
+J(π) = Eπ
+"T −1X
+t=0
+γtrt
+#
+. (4)
+This objective matches the control target of reducing HV AC
+energy while avoiding persistent comfort-band violations
+across the monitored thermal zones.
+III. D IFFFNO M ETHOD
+A. Conditional Diffusion Policy
+Instead of regressing a single action from st, we generate
+actions through a conditional denoising process [17]. Let x0
+denote the clean action and xk its noisy version at reverse step
+k. Under the variance-preserving parameterization,
+xk = √¯αkx0 +
+√
+1 − ¯αkϵ, ϵ ∼ N(0, I), (5)
+and the denoiser directly predicts the clean action
+ˆx0 = fθ(xk, k,st). (6)
+Under the standard denoising diffusion probabilistic model
+(DDPM) parameterization, the reverse posterior mean can be
+written as
+µk(ˆx0, xk) = c1(k)ˆx0 + c2(k)xk, (7)
+where c1(k) and c2(k) are determined by the noise schedule.
+Starting from Gaussian noise, the policy iteratively recon-
+structs a feasible multi-zone action through reverse DDPM
+sampling. This formulation is attractive for HV AC control
+because it can represent richer action distributions than de-
+terministic or unimodal Gaussian policies while exposing the
+structure of the joint action to the denoiser.
+B. Fourier-Structured Action Denoiser
+The denoiser is the key component that injects action-space
+structure into the diffusion controller. In multi-zone HV AC
+control, the joint action should not be viewed as an unordered
+list of independent coordinates, because zone-level commands
+are coupled through shared thermal dynamics and comfort
+constraints. A standard MLP denoiser has limited ability to
+express this structured coordination explicitly. We therefore
+DiffFNO inference
+Posterior sampling
+Clean action 
+estimate
+Zone sensors
+Zone sensors
+IoT sensing and state aggregation
+Gateway node Aggregated
+state
+IoT communication layer
+Joint Multi-
+Zone HVAC 
+Action
+DiffFNO denoiser
+Replay
+Buffer
+TD target + critic loss Double Critic
+PG Loss 
+BC LossExpert  action
+Hybrid Actor Loss
+Training
+Sampled state ActorReplay
+Buffer
+TD target + critic loss Double Critic
+PG Loss 
+BC LossExpert  action
+Hybrid Actor Loss
+Training
+Sampled state Actor
+spectral conv on 
+retained low modesAction-axis
+lifting
+1x1 pointwise conv
+state/time 
+conditioning
+Residual linear path
+gated 
+residual 
+fusion
+DiffFNO Backbone on Action Axis
+spectral conv on 
+retained low modesAction-axis
+lifting
+1x1 pointwise conv
+state/time 
+conditioning
+Residual linear path
+gated 
+residual 
+fusion
+DiffFNO Backbone on Action Axis
+Fig. 2: DiffFNO framework. The policy models the joint action through
+reverse diffusion, the DiffFNO denoiser imposes spectral structure on the
+action-dimension axis, and the residual pathway preserves local corrective
+flexibility. A double critic is used during training, while deployment uses
+reverse diffusion sampling.
+replace the MLP denoiser with an FNO denoiser that operates
+directly along the action-dimension axis, so that the joint
+action is processed as a compact control field over zones.
+Given noisy action xk, diffusion step k, and state st, the latent
+feature map is updated by
+Y(ℓ+1) = σ
+
+K(ℓ)
+spec(Y(ℓ)) + K(ℓ)
+pw(Y(ℓ)) + hc
+
+, (8)
+where K(ℓ)
+spec is a truncated one-dimensional spectral convo-
+lution, K(ℓ)
+pw is a pointwise convolution, and hc is the joint
+embedding of state and diffusion-step information. The final
+clean-action estimate is
+fθ(xk, k,st) = ˆyk + sigmoid(g)Wrxk. (9)
+Here ˆyk is the spectrally structured output of the FNO trunk
+and the gated residual term re-injects local coordinate infor-
+mation from the noisy action. This design encourages glob-
+ally coordinated low-frequency action patterns while retaining
+enough local flexibility for zone-specific comfort regulation.
+In the deployment setting studied here, this residual pathway
+is an essential part of the main method because it improves
+comfort compliance relative to the no-residual alternative.
+C. Hybrid Training Framework
+Although actions are generated through reverse diffusion
+sampling at deployment, the actor is still trained within an off-
+policy actor–critic framework. We use a conservative double
+critic
+Qmin
+ϕ (s, a) = min{Qϕ1 (s, a), Qϕ2 (s, a)}, (10)
+for policy evaluation during training. The actor combines
+diffusion-consistent behavior cloning (BC) from MPC demon-
+strations with critic-driven policy gradient (PG) improvement:
+LBC = E
+h
+∥fθ(xexp
+k , k,st) − aexp
+t ∥2
+2
+i
+, (11)
+LPG = −Est
+
+Qmin
+ϕ (st, πθ(st))
+
+, (12)
+===== PAGE 4 =====
+Lactor = ωLBC + (1 − ω)LPG, (13)
+where LBC reconstructs expert actions from noisy inputs and
+LPG maximizes the conservative critic value [18]. A high
+initial ω stabilizes early learning, and the weight is then
+decayed so that the policy can move beyond imitation while
+preserving physically meaningful action priors. This hybrid
+design allows the actor to inherit low-jitter control behavior
+from MPC before refining the policy with long-horizon value
+information. At deployment time, the controller executes the
+learned DiffFNO policy through reverse diffusion sampling.
+Under the centralized IoT interface considered here,
+building-wide measurements are aggregated into a common
+state vector, and the controller must map that shared state to
+a coordinated joint action. This setting directly motivates a
+state-conditional generative policy with explicit action-space
+structure.
+This centralized joint-action view is complementary to de-
+centralized and multi-agent HV AC formulations. Multi-agent
+methods can reduce per-agent action dimensionality and sup-
+port local autonomy, but they often require additional coordi-
+nation mechanisms, communication assumptions, or reward-
+allocation designs to recover system-level energy–comfort
+objectives [19]–[21]. In contrast, the setting considered here
+assumes that an IoT gateway already aggregates building-wide
+sensor streams for supervisory control. Under this interface, it
+is natural to let one policy generate the full zone-wise HV AC
+command while embedding the desired coordination directly
+in the action representation. The contribution is therefore
+architectural rather than organizational: DiffFNO does not
+change the MDP or add handcrafted zone rules, but changes
+how the policy represents and denoises the coupled action
+vector.
+IV. S IMULATION EXPERIMENTS AND DISCUSSIONS
+A. Setup
+We evaluate all methods on the BEAR OfficeSmall-Hot Dry
+benchmark [15], which models a six-zone office building un-
+der Tucson hot-dry weather. The controller receives synchro-
+nized sensor-style state streams at each control step and returns
+zone-wise HV AC commands through the same interface. The
+control interval is one hour and each episode lasts 168 steps.
+Unless otherwise stated, all methods share the same target
+temperature, comfort band, simulator disturbances, and reward
+setting, which helps isolate controller quality rather than task-
+definition changes. The main comparison focuses on learning-
+based controllers, including DiffFNO, DiffFNO w/o Residual,
+Diffusion-MLP, soft actor-critic (SAC), and SAC+MPC. The
+two DiffFNO variants share the same diffusion training and
+deployment pipeline and differ only in whether the residual
+pathway is enabled, while Diffusion-MLP replaces the spectral
+denoiser with a standard MLP denoiser. MPC with planning
+horizon 3 is used to generate expert demonstrations and serves
+as a physical reference in the spectral analysis. Learning-
+based methods report three-seed statistics to reflect training
+variability. We report four complementary metrics: episode
+TABLE I: Shared hyperparameters for the learning-based methods.
+Setting Value Setting Value
+Training steps 1.0 × 106 Batch size / replay buffer 256 / 106
+Discount / n-step return 0.99 / 3 Update-per-step 0.5
+Actor / critic learning
+rate
+10−4 /
+2 × 10−5
+Diffusion steps K 6
+FNO width / retained
+modes
+48 / 4 Spectral layers /
+activation
+1 / Mish
+Main residual pathway enabled BC weight schedule ω 0.8 → 0.1
+3.5
+4.5
+5.5
+SAC+MPC
+SAC
+850 900 1000
+0.8
+1.1
+1.4
+1.7
+DiffFNO
+NoRes
+MLP
+MPC
+1800 1900 5950 6000
+Energy consumption (kWh)
+Comfort violations
+Diffusion-based Baseline Pareto frontier
+Fig. 3: Energy–comfort Pareto comparison for the evaluated controllers.
+Learning-based points show three-seed means and error bars show one
+standard deviation, while MPC is included as a physical reference controller.
+HV AC energy, comfort violations, final test reward, and mean
+absolute action change. Energy and comfort violations jointly
+reflect the primary deployment objective, while final reward
+and mean absolute action change capture the optimized RL
+objective and control smoothness.
+Inference cost. DiffFNO uses only K = 6 reverse diffusion
+steps at deployment. On a single NVIDIA RTX 3070 graphics
+processing unit (GPU) with batch size 1, this corresponds to
+approximately 5.2 ms per denoising step, or about 31 ms per
+control decision for the six-step chain. The resulting online
+cost remains far below the one-hour control interval used in
+BEAR.
+B. Overall Performance
+Table II first highlights the main comparison in this study:
+DiffFNO versus the MLP-denoiser diffusion baseline. Under
+the same diffusion-control setting, replacing the MLP denoiser
+with the proposed DiffFNO architecture improves all four
+reported criteria. Relative to Diffusion-MLP, DiffFNO reduces
+episode energy from 990.9 to 901.3 kWh, lowers comfort
+violations from 1.441 to 0.886, improves the final test reward
+from −1.106 to −0.738, and reduces mean |∆a| from 0.0596
+to 0.0402. These gains indicate that the structured FNO
+denoiser and residual pathway make diffusion-based HV AC
+control more effective than a generic MLP denoiser.
+The Pareto view in Fig. 3 reinforces the same conclu-
+sion. DiffFNO dominates Diffusion-MLP in both energy and
+comfort violations, showing that expressive diffusion alone is
+not sufficient without a denoiser that respects the structured
+===== PAGE 5 =====
+TABLE II: Overall comparison of learning-based controllers on the BEAR OfficeSmall-Hot Dry task. Results report the three-seed mean ± standard deviation.
+Lower mean |∆a| indicates smoother control.
+Method Energy (kWh) ↓ Violations ↓ Test Reward ↑ Mean |∆a| ↓
+DiffFNO 901.3 ± 19.9 0.886 ± 0.135 -0.738 ± 0.086 0.0402 ± 0.0090
+DiffFNO w/o Residual 871.1 ± 6.6 1.082 ± 0.338 -0.844 ± 0.207 0.0357 ± 0.0109
+Diffusion-MLP 990.9 ± 38.4 1.441 ± 0.510 -1.106 ± 0.321 0.0596 ± 0.0162
+SAC 5980.4 ± 27.3 5.483 ± 0.046 -5.055 ± 0.011 0.3430 ± 0.0412
+SAC+MPC 1864.6 ± 74.6 3.431 ± 0.294 -2.600 ± 0.222 0.1729 ± 0.0117
+geometry of multi-zone actions. SAC-based baselines remain
+far from the relevant operating regime for this benchmark.
+MPC is retained in the Pareto view only as a physical
+reference controller, while Table II focuses on learning-based
+controllers. The no-residual variant is retained in this figure
+for component analysis, where its role is to probe the residual
+pathway rather than to define the primary baseline comparison.
+Deployment implications. The results should be read as
+evidence for a policy-design principle rather than as a claim
+that one scalar metric is universally dominant. DiffFNO does
+not minimize raw energy among all variants. Instead, it rep-
+resents a more comfort-compliant operating point while still
+improving energy, reward, and smoothness over the MLP-
+denoiser baseline. This distinction matters in occupied build-
+ings, where persistent comfort violations can invalidate an
+apparently energy-efficient policy. The current study is also
+bounded by the OfficeSmall-Hot Dry configuration, hourly
+control interval, and available MPC demonstrations. Extending
+the same principle to larger buildings may require topology-
+aware action ordering or graph-structured variants, but the
+present results show that even a compact spectral prior over
+the joint action vector can improve the behavior of diffusion-
+based HV AC control.
+C. Action Quality and Ablation Study
+The spectral prior imposed by DiffFNO is reflected in the
+physical HV AC signal. As shown in Fig. 4, DiffFNO concen-
+trates substantially more spectral mass in the low-frequency
+region than Diffusion-MLP and moves closer to the smooth
+operating pattern of MPC. Using the 2 cycles/day cutoff in
+the Welch spectrum, DiffFNO assigns 82.6% of HV AC power
+spectral mass to the low-frequency region, compared with
+95.2% for physical MPC and 73.7% for Diffusion-MLP. The
+result is consistent with the lower mean |∆a| of DiffFNO
+relative to Diffusion-MLP in Table II: the proposed controller
+improves the overall control objective while generating a more
+physically consistent control signal than the MLP-denoiser
+baseline.
+The spectral analysis is complemented by the ablation
+summary in Fig. 5, which clarifies the role of each module
+in the proposed controller. The no-residual variant should be
+interpreted as a component ablation: removing the residual
+pathway yields lower energy and smoother action increments,
+but it also increases comfort violations from 0.886 to 1.082
+and reduces the final reward from −0.738 to −0.844. This
+pattern supports the interpretation that the residual pathway
+restores useful local flexibility near comfort boundaries, where
+0 2 4 6 8 10 12
+Frequency (cycles/day)
+103
+104
+105
+106
+PSD of HVAC Power (kW2
+/Hz)
+2 cpd Physical MPC | low<= 2 cpd: 95.2%
+DiffFNO | low<= 2 cpd: 82.6%
+Diffusion-MLP | low<= 2 cpd: 73.7%
+Fig. 4: HV AC power spectral density comparison for physical MPC, DiffFNO,
+and Diffusion-MLP. The learned-controller curves are averaged over three
+seeds. The dashed line marks the 2 cycles/day cutoff.
+overly smooth coordinated actions may underreact to zone-
+specific thermal deviations. In Fig. 5, the “Convergence”
+column is computed from the normalized terminal evaluation
+reward across ablation variants, so it should be read as
+a compact terminal-performance indicator rather than as a
+claim about the full dynamic convergence trajectory. From a
+control perspective, building HV AC decisions are repeatedly
+executed over long horizons, and a policy that reduces energy
+but sacrifices comfort compliance may still be undesirable
+under coupled thermal dynamics. The smoother low-frequency
+behavior of DiffFNO therefore matters not only as a diagnostic
+statistic but also as evidence that the learned controller is better
+aligned with physically consistent building operation.
+Taken together, the experiments suggest a clear division
+of labor among the model components. Diffusion provides
+expressive joint-action generation, DiffFNO injects a structural
+prior for coordinated multi-zone control, and the residual
+pathway improves comfort-oriented local correction. This de-
+composition matches the empirical pattern in Table II and
+Fig. 5, where no single simplified variant preserves all three
+advantages at once. The proposed design does not rely on
+handcrafted rules tied to a specific room or actuator. In-
+stead, it relies on a generic centralized interface: a vector of
+sensor-derived building states, a vector of zone-wise control
+commands, and a reward that trades energy against comfort
+compliance. As long as that interface is available, the same
+modeling principle can be applied to other multi-zone build-
+ings, climates, or supervisory control layers, although the final
+quantitative gains should still be validated case by case.
+===== PAGE 6 =====
+Energy Comfort Smoothness Convergence
+DiffFNO
+DiffFNO w/o Residual
+Diffusion-MLP
+0.75 1.00 0.92 0.88
+1.00 0.53 1.00 1.00
+0.00 0.00 0.00 0.00
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Normalized score
+Fig. 5: Normalized ablation summary across energy, comfort, smoothness,
+and convergence for the evaluated diffusion variants. Each column is min–
+max normalized over DiffFNO, DiffFNO w/o Residual, and Diffusion-MLP.
+V. C ONCLUSION
+This paper has presented DiffFNO for IoT-enabled build-
+ing energy management and has evaluated it on the BEAR
+OfficeSmall-Hot Dry benchmark. The simulation results have
+shown that, compared with the MLP-denoiser diffusion base-
+line, DiffFNO achieves a more favorable energy–comfort
+trade-off, reduces comfort violations, improves the final test
+reward, and generates smoother control trajectories. The ab-
+lation results have further shown that the residual pathway
+is important for comfort-oriented local correction: removing
+it lowers energy and action variation, but increases comfort
+violations and degrades reward. These findings suggest that
+structured action modeling is beneficial for IoT-enabled build-
+ing control, especially when coordinated actuation and local
+comfort constraints must be handled simultaneously. Future
+directions include exploring value-aware sampling strategies,
+broader validation across additional building types and climate
+profiles, and extensions toward safety-aware control under
+deployment uncertainty.
+REFERENCES
+[1] L. P ´erez-Lombard, J. Ortiz, and C. Pout, “A review on buildings energy
+consumption information,” Energy and Buildings , vol. 40, no. 3, pp.
+394–398, 2008.
+[2] X. Cao, X. Dai, and J. Liu, “Building energy-consumption status
+worldwide and the state-of-the-art technologies for zero-energy buildings
+during the past decade,” Energy and Buildings , vol. 128, pp. 198–213,
+2016.
+[3] J. Wang, L. Bai, J. Chen, and J. Wang, “Age of information oriented
+data aggregation for industrial internet of things,” in 2024 IEEE/CIC
+International Conference on Communications in China (ICCC) . IEEE,
+2024, pp. 621–626.
+[4] H. Hou, S. Bi, X. Li, and X. Lin, “Joint semantic information gathering
+and broadcasting for multi-task edge processing,” in 2024 IEEE/CIC
+International Conference on Communications in China (ICCC) . IEEE,
+2024, pp. 60–65.
+[5] J. Drgo ˇna, J. Arroyo, I. Cupeiro Figueroa, D. Blum, K. Arendt, D. Kim,
+E. P. Oll ´e, J. Oravec, M. Wetter, D. L. Vrabie, and L. Helsen, “All
+you need to know about model predictive control for buildings,” Annual
+Reviews in Control, vol. 50, pp. 190–232, 2020.
+[6] T. Wei, Y . Wang, and Q. Zhu, “Deep reinforcement learning for building
+HV AC control,” inProceedings of the 54th Annual Design Automation
+Conference 2017. ACM, 2017, pp. 1–6.
+[7] M. Biemann, F. Scheller, X. Liu, and L. Huang, “Experimental eval-
+uation of model-free reinforcement learning algorithms for continuous
+HV AC control,”Applied Energy, vol. 298, p. 117164, 2021.
+[8] K. Al Sayed, A. Boodi, R. Sadeghian Broujeny, and K. Beddiar,
+“Reinforcement learning for HV AC control in intelligent buildings:
+A technical and conceptual review,” Journal of Building Engineering ,
+vol. 95, p. 110085, 2024.
+[9] C. Chi, Z. Xu, S. Feng, E. Cousineau, Y . Du, B. Burchfiel, R. Tedrake,
+and S. Song, “Diffusion policy: Visuomotor policy learning via action
+diffusion,” The International Journal of Robotics Research , vol. 44, no.
+10–11, pp. 1684–1704, 2025.
+[10] M. Janner, Y . Du, J. Tenenbaum, and S. Levine, “Planning with diffusion
+for flexible behavior synthesis,” in Proceedings of the 39th International
+Conference on Machine Learning , vol. 162. PMLR, 2022, pp. 9902–
+9915.
+[11] Z. Wang, J. J. Hunt, and M. Zhou, “Diffusion policies as an expres-
+sive policy class for offline reinforcement learning,” in The Eleventh
+International Conference on Learning Representations , 2023.
+[12] Z. Li, N. B. Kovachki, K. Azizzadenesheli, B. Liu, K. Bhattacharya,
+A. Stuart, and A. Anandkumar, “Fourier neural operator for parametric
+partial differential equations,” in The Ninth International Conference on
+Learning Representations, 2021.
+[13] X. Liu, B. Xu, S. Cao, and L. Zhang, “Mitigating spectral bias for the
+multiscale operator learning,” Journal of Computational Physics , vol.
+506, p. 112944, 2024.
+[14] H. Liu and L. Lyu, “Co-design of transmission and control in industrial
+IoT systems,” in 2024 IEEE/CIC International Conference on Commu-
+nications in China (ICCC) . IEEE, 2024, pp. 615–620.
+[15] C. Zhang, Y . Shi, and Y . Chen, “BEAR: Physics-principled building
+environment for control and reinforcement learning,” in Proceedings
+of the 14th ACM International Conference on Future Energy Systems .
+ACM, 2023, pp. 66–71.
+[16] Thermal Environmental Conditions for Human Occupancy , American
+Society of Heating, Refrigerating and Air-Conditioning Engineers, At-
+lanta, GA, 2023, ANSI/ASHRAE Standard 55-2023.
+[17] J. Ho, A. N. Jain, and P. Abbeel, “Denoising diffusion probabilistic
+models,” in Advances in Neural Information Processing Systems, vol. 33.
+Curran Associates, Inc., 2020, pp. 6840–6851.
+[18] S. Fujimoto and S. S. Gu, “A minimalist approach to offline reinforce-
+ment learning,” in Advances in Neural Information Processing Systems ,
+vol. 34. Curran Associates, Inc., 2021, pp. 20 132–20 145.
+[19] J. R. Vazquez-Canteli, G. Henze, and Z. Nagy, “MARLISA: Multi-
+agent reinforcement learning with iterative sequential action selection for
+load shaping of grid-interactive connected buildings,” in Proceedings of
+the 7th ACM International Conference on Systems for Energy-Efficient
+Buildings, Cities, and Transportation . ACM, 2020, pp. 170–179.
+[20] L. Yu, Y . Sun, Z. Xu, C. Shen, D. Yue, T. Jiang, and X. Guan, “Multi-
+agent deep reinforcement learning for HV AC control in commercial
+buildings,” IEEE Transactions on Smart Grid , vol. 12, no. 1, pp. 407–
+419, 2021.
+[21] W. Xue, N. Jia, and M. Zhao, “Multi-agent deep reinforcement learning
+based HV AC control for multi-zone buildings considering zone-energy-
+allocation optimization,” Energy and Buildings , vol. 329, p. 115241,
+2025.
