@@ -1,0 +1,40 @@
+# ============================================================================
+# DROPT — Diffusion-based RL for HVAC energy optimization (BEAR experiments)
+# Python 3.10+ (tested on 3.12.7). Versions pinned to the working environment.
+#
+# NOTE on PyTorch: the working environment uses a CUDA 11.8 build
+#   (torch 2.7.1+cu118). To reproduce GPU training, install torch from the
+#   official CUDA index, e.g.:
+#     pip install torch==2.7.1 --index-url https://download.pytorch.org/whl/cu118
+#   The pin below (torch==2.7.1) installs the default (CPU/CUDA) wheel from PyPI.
+#
+# NOTE: Sinergym / EnergyPlus experiments run in a SEPARATE isolated venv
+#   (see docs/HANDOFF_sinergym_direction.md) and are intentionally NOT listed
+#   here — sinergym requires numpy>=2.3 / gymnasium>=1.2 which conflict with
+#   the versions below. Do not install sinergym into this environment.
+# ============================================================================
+
+# --- Core deep learning ---
+torch==2.7.1
+
+# --- RL framework ---
+tianshou==0.5.1
+gymnasium==1.1.1
+stable-baselines3==2.6.0
+
+# --- Scientific stack ---
+numpy==1.26.4
+scipy==1.13.1
+pandas==2.2.3
+scikit-learn==1.5.1
+
+# --- Optimization (MPC expert / baselines) ---
+cvxpy==1.7.4
+
+# --- Logging & visualization ---
+tensorboard==2.19.0
+matplotlib==3.9.2
+tqdm==4.66.5
+
+# --- Config / IO ---
+PyYAML==6.0.1
