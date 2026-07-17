@@ -398,6 +398,10 @@ debug/
 debug_*/
 *.debug
 
+# 组会/汇报 PPT（大二进制，不入库）
+*.pptx
+*.ppt
+
 # 测试输出
 test_output/
 test_results/
