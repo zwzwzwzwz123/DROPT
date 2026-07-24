@@ -1,0 +1,161 @@
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+Users of this version of Gym should be able to simply replace 'import gym' with 'import gymnasium as gym' in the vast majority of cases.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+⚠️  提示: n_step>1 与奖励归一化不兼容，已自动关闭 reward_normalization
+
+============================================================
+  BEAR Building + DiffFNO + Guidance
+============================================================
+{'actor_lr': 0.0001,
+ 'add_violation_penalty': True,
+ 'algorithm': 'diffusion_fno_guided_bcfix_clean',
+ 'batch_size': 256,
+ 'bc_coef': True,
+ 'bc_weight': 0.8,
+ 'bc_weight_decay_steps': 150000,
+ 'bc_weight_final': 0.1,
+ 'beta_schedule': 'vp',
+ 'buffer_size': 1000000,
+ 'building_type': 'OfficeMedium',
+ 'critic_lr': 2e-05,
+ 'device': device(type='cuda', index=0),
+ 'diffusion_steps': 6,
+ 'energy_weight': 0.4,
+ 'episode_length': 168,
+ 'episode_per_test': 1,
+ 'epoch': 245,
+ 'expert_type': 'mpc',
+ 'exploration_noise': 0.05,
+ 'fno_activation': 'mish',
+ 'fno_layers': 1,
+ 'fno_modes': 4,
+ 'fno_width': 64,
+ 'full_episode': False,
+ 'gamma': 0.99,
+ 'guidance_scale': 0.0,
+ 'guidance_type': 'critic',
+ 'hidden_dim': 256,
+ 'location': 'Tucson',
+ 'log_prefix': 'officemedium_fno_noguide_default_1m_s1',
+ 'log_update_interval': 200,
+ 'logdir': 'log_building',
+ 'lr_decay': False,
+ 'max_power': 8000,
+ 'mpc_planning_steps': 3,
+ 'n_step': 3,
+ 'paper_guidance_scale': 5.0,
+ 'paper_guidance_seed': 0,
+ 'paper_log': True,
+ 'paper_log_episodes': 3,
+ 'paper_log_interval': 50,
+ 'paper_log_max_steps': 0,
+ 'prior_alpha': 0.6,
+ 'prior_beta': 0.4,
+ 'prioritized_replay': False,
+ 'resume_path': None,
+ 'reward_normalization': False,
+ 'reward_scale': 0.00035,
+ 'save_interval': 1000,
+ 'seed': 1,
+ 'step_per_collect': 1024,
+ 'step_per_epoch': 4096,
+ 'target_temp': 26.0,
+ 'temp_tolerance': 1.0,
+ 'temp_weight': 0.6,
+ 'test_num': 1,
+ 'time_resolution': 3600,
+ 'total_steps': 1000000,
+ 'training_num': 1,
+ 'update_per_step': 0.5,
+ 'vector_env_type': 'dummy',
+ 'violation_penalty': 10.0,
+ 'watch': False,
+ 'wd': 0.0001,
+ 'weather_type': 'Hot_Dry'}
+
+Creating BEAR environments ...
+###############All Zones from Ground############
+CORE_BOTTOM  [Zone index]:  0
+PERIMETER_BOT_ZN_3  [Zone index]:  1
+PERIMETER_BOT_ZN_2  [Zone index]:  2
+PERIMETER_BOT_ZN_1  [Zone index]:  3
+PERIMETER_BOT_ZN_4  [Zone index]:  4
+FIRSTFLOOR_PLENUM  [Zone index]:  5
+CORE_MID  [Zone index]:  6
+PERIMETER_MID_ZN_3  [Zone index]:  7
+PERIMETER_MID_ZN_2  [Zone index]:  8
+PERIMETER_MID_ZN_1  [Zone index]:  9
+PERIMETER_MID_ZN_4  [Zone index]:  10
+MIDFLOOR_PLENUM  [Zone index]:  11
+CORE_TOP  [Zone index]:  12
+PERIMETER_TOP_ZN_3  [Zone index]:  13
+PERIMETER_TOP_ZN_2  [Zone index]:  14
+PERIMETER_TOP_ZN_1  [Zone index]:  15
+PERIMETER_TOP_ZN_4  [Zone index]:  16
+TOPFLOOR_PLENUM  [Zone index]:  17
+###################################################
+✓ 状态维度验证通过: 56 (3*18+2)
+✓ 专家控制器 'mpc' 初始化成功
+###############All Zones from Ground############
+CORE_BOTTOM  [Zone index]:  0
+PERIMETER_BOT_ZN_3  [Zone index]:  1
+PERIMETER_BOT_ZN_2  [Zone index]:  2
+PERIMETER_BOT_ZN_1  [Zone index]:  3
+PERIMETER_BOT_ZN_4  [Zone index]:  4
+FIRSTFLOOR_PLENUM  [Zone index]:  5
+CORE_MID  [Zone index]:  6
+PERIMETER_MID_ZN_3  [Zone index]:  7
+PERIMETER_MID_ZN_2  [Zone index]:  8
+PERIMETER_MID_ZN_1  [Zone index]:  9
+PERIMETER_MID_ZN_4  [Zone index]:  10
+MIDFLOOR_PLENUM  [Zone index]:  11
+CORE_TOP  [Zone index]:  12
+PERIMETER_TOP_ZN_3  [Zone index]:  13
+PERIMETER_TOP_ZN_2  [Zone index]:  14
+PERIMETER_TOP_ZN_1  [Zone index]:  15
+PERIMETER_TOP_ZN_4  [Zone index]:  16
+TOPFLOOR_PLENUM  [Zone index]:  17
+###################################################
+✓ 状态维度验证通过: 56 (3*18+2)
+✓ 专家控制器 'mpc' 初始化成功
+###############All Zones from Ground############
+CORE_BOTTOM  [Zone index]:  0
+PERIMETER_BOT_ZN_3  [Zone index]:  1
+PERIMETER_BOT_ZN_2  [Zone index]:  2
+PERIMETER_BOT_ZN_1  [Zone index]:  3
+PERIMETER_BOT_ZN_4  [Zone index]:  4
+FIRSTFLOOR_PLENUM  [Zone index]:  5
+CORE_MID  [Zone index]:  6
+PERIMETER_MID_ZN_3  [Zone index]:  7
+PERIMETER_MID_ZN_2  [Zone index]:  8
+PERIMETER_MID_ZN_1  [Zone index]:  9
+PERIMETER_MID_ZN_4  [Zone index]:  10
+MIDFLOOR_PLENUM  [Zone index]:  11
+CORE_TOP  [Zone index]:  12
+PERIMETER_TOP_ZN_3  [Zone index]:  13
+PERIMETER_TOP_ZN_2  [Zone index]:  14
+PERIMETER_TOP_ZN_1  [Zone index]:  15
+PERIMETER_TOP_ZN_4  [Zone index]:  16
+TOPFLOOR_PLENUM  [Zone index]:  17
+###################################################
+✓ 状态维度验证通过: 56 (3*18+2)
+✓ 专家控制器 'mpc' 初始化成功
+Environments ready
+  state_dim=56, action_dim=18, rooms=18
+
+Building DiffFNO backbone ...
+Guidance disabled (scale <= 0)
+  DiffFNO params: 55,688
+  Critic params: 353,282
+
+Policy ready
+  algorithm=diffusion_fno_guided_bcfix_clean, diffusion_steps=6, fno_modes=4, guidance_scale=0.0
+
+Preparing collectors ...
+Replay buffer: 1,000,000 (uniform)
+
+============================================================
+  Start training (Diffusion + DiffFNO + Guidance)
+============================================================
+Epoch #1:   0%|          | 0/4096 [00:00<?, ?it/s]Epoch #1:  25%|##5       | 1024/4096 [00:44<02:12, 23.24it/s]Epoch #1:  25%|##5       | 1024/4096 [01:00<02:12, 23.24it/s]Epoch #1:  25%|##5       | 1024/4096 [01:34<02:12, 23.24it/s, action/action_max=1.000, action/action_mean=0.489, action/action_min=-1.000, action/action_std=0.716, bc_weight=0.798, env_step=1024, grad_norm/actor=1.152, grad_norm/critic=0.409, len=168, loss/actor=0.224, loss/bc=0.150, loss/critic=0.005, loss/pg=0.513, n/ep=6, n/st=1024, q_value/q_max=-0.454, q_value/q_mean=-0.520, q_value/q_min=-0.597, q_value/q_std=0.026, q_value/target_q_mean=-0.521, q_value/target_q_std=0.056, q_value/td_error=0.027, rew=-13.64]Epoch #1:  50%|#####     | 2048/4096 [02:28<02:39, 12.83it/s, action/action_max=1.000, action/action_mean=0.489, action/action_min=-1.000, action/action_std=0.716, bc_weight=0.798, env_step=1024, grad_norm/actor=1.152, grad_norm/critic=0.409, len=168, loss/actor=0.224, loss/bc=0.150, loss/critic=0.005, loss/pg=0.513, n/ep=6, n/st=1024, q_value/q_max=-0.454, q_value/q_mean=-0.520, q_value/q_min=-0.597, q_value/q_std=0.026, q_value/target_q_mean=-0.521, q_value/target_q_std=0.056, q_value/td_error=0.027, rew=-13.64]

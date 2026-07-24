@@ -59,20 +59,18 @@ for i, (ax, b) in enumerate(zip(axes, BLD3)):
 fig.suptitle("Energy Consumption across Three Buildings (3-seed, 1M steps)", fontsize=13)
 fig.tight_layout(); save(fig, "fig1_three_building_energy")
 
-# ===== 图2: 跨规模省幅曲线 (洼地) =====
+# ===== 图2: 跨规模省幅曲线 (单调递增, 默认档统一后) =====
 zones = [D[(b,"Full")]["zones"] for b in BLD3]
 sav = [(D[(b,"MLP")]["energy_mean"]-D[(b,"Full")]["energy_mean"])/D[(b,"MLP")]["energy_mean"]*100 for b in BLD3]
 fig, ax = plt.subplots(figsize=(6.5, 4.3))
 ax.plot(zones, sav, "o-", color=C_FNO, lw=2.2, ms=11, mfc="white", mew=2)
 for z, s, b in zip(zones, sav, BLD3):
     ax.annotate(f"{b}\n{s:.1f}%", (z,s), textcoords="offset points",
-                xytext=(0, 14 if s<40 else -34), ha="center", fontsize=10)
-ax.axvspan(15, 21, color=C_NG, alpha=0.2)
-ax.text(18, 27, "valley\n(strongest coupling)", ha="center", fontsize=9, color=C_MLP)
+                xytext=(0, 14 if s<45 else -34), ha="center", fontsize=10)
 ax.set_xlabel("Number of zones"); ax.set_ylabel("Energy saving vs Diff-MLP (%)")
-ax.set_title("FNO advantage is scale-dependent, NOT monotonic")
-ax.set_ylim(-4, 60); ax.set_xticks(zones)
-fig.tight_layout(); save(fig, "fig2_saving_curve_valley")
+ax.set_title("FNO advantage grows with building scale\n(unified default protocol)")
+ax.set_ylim(0, 60); ax.set_xticks(zones)
+fig.tight_layout(); save(fig, "fig2_saving_curve_monotonic")
 
 # ===== 图3: 三建筑每区违规率 =====
 fv = [D[(b,"Full")]["per_zone_viol_pct"] for b in BLD3]

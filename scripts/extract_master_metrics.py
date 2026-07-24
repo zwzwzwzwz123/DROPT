@@ -41,14 +41,15 @@ REG = {
    "diffusion_mlp_bcfix_clean_OfficeSmall_Hot_Dry_20260406_140006",
    "diffusion_mlp_bcfix_clean_OfficeSmall_Hot_Dry_20260415_100054__mlp_seed0",
    "diffusion_mlp_bcfix_clean_OfficeSmall_Hot_Dry_20260420_022234__mlp_seed1"],
+ # 【07-19 选 a: 默认档统一, 替换旧手调档】
  ("OfficeMedium","Full"): [
-   "officemedium_fno_aligned_1m_s42_OfficeMedium_Hot_Dry_20260714_215641",
-   "officemedium_fno_aligned_1m_s0_OfficeMedium_Hot_Dry_20260714_215752",
-   "officemedium_fno_aligned_1m_s1_OfficeMedium_Hot_Dry_20260714_215759"],
+   "officemedium_fno_default_probe_s42_OfficeMedium_Hot_Dry_20260716_103411",
+   "officemedium_fno_default_1m_s0_OfficeMedium_Hot_Dry_20260717_194958",
+   "officemedium_fno_default_1m_s1_OfficeMedium_Hot_Dry_20260717_195025"],
  ("OfficeMedium","MLP"): [
-   "diffusion_mlp_bcfix_clean_OfficeMedium_Hot_Dry_20260323_232609",
-   "officemedium_mlp_1m_s0_OfficeMedium_Hot_Dry_20260713_162623",
-   "officemedium_mlp_1m_s1_OfficeMedium_Hot_Dry_20260713_162647"],
+   "officemedium_mlp_default_1m_s42_OfficeMedium_Hot_Dry_20260717_195822",
+   "officemedium_mlp_default_1m_s0_OfficeMedium_Hot_Dry_20260717_235506",
+   "officemedium_mlp_default_1m_s1_OfficeMedium_Hot_Dry_20260718_040544"],
  ("SchoolPrimary","Full"): [
    "school_guided_1m_s42_SchoolPrimary_Hot_Dry_20260708_160354",
    "school_guided_1m_s0_SchoolPrimary_Hot_Dry_20260708_160618",
@@ -95,7 +96,9 @@ for (bld, var), dirs in REG.items():
     agg = {}
     for m in TAGS:
         v = np.array(per[m], float); v = v[~np.isnan(v)]
-        agg[m] = (float(np.mean(v)), float(np.std(v)))
+        # ddof=1 样本标准差(除 n-1)，统一全项目口径(与 _extract_medium_default / _extract_sac_baselines 一致)
+        _std = float(np.std(v, ddof=1)) if v.size >= 2 else 0.0
+        agg[m] = (float(np.mean(v)), _std)
     zones = ZONES[bld]
     pzv = agg["violations"][0] / zones * 100   # 每区违规率 %
     rows.append({

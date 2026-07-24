@@ -11,12 +11,15 @@ POLL_SEC=300            # 每 5 分钟检查一次
 STOP_FLAG=run_logs/_rolling.STOP
 LAUNCH=scripts/_sac_launch.sh
 
-# 队列: 只含 Small/School。格式 "kind building seed"。medium 一律不列(HOLD)。
-# 先清 SAC+MPC(mpc) 再跑纯 SAC(sac)，与 SAC_QUEUE.md #4,5,8,9 / #10,11,12,16,17,18 对应。
+# 队列: Small/School/Medium。格式 "kind building seed"。
+# ✅ 2026-07-17: medium 解冻(探针坐实统一成立), 已追加到队尾。launcher medium 行已同步改为默认档。
+# 先清 SAC+MPC(mpc) 再跑纯 SAC(sac)，与 SAC_QUEUE.md 对应。
 QUEUE=(
   "mpc small 0"  "mpc small 1"  "mpc school 0"  "mpc school 1"
+  "mpc medium 0" "mpc medium 1"
   "sac small 42" "sac small 0"  "sac small 1"
   "sac school 42" "sac school 0" "sac school 1"
+  "sac medium 42" "sac medium 0" "sac medium 1"
 )
 
 log(){ echo "[$(date '+%m-%d %H:%M:%S')] $*"; }
@@ -33,7 +36,7 @@ is_done(){ grep -aq "Training finished" "run_logs/$1.log" 2>/dev/null; }
 has_log(){ [ -f "run_logs/$1.log" ]; }
 
 rm -f "$STOP_FLAG"
-log "滚动 launcher 启动。队列 ${#QUEUE[@]} 个(仅 Small/School)。MAX_PARALLEL=$MAX_PARALLEL。停止: touch $STOP_FLAG"
+log "滚动 launcher 启动。队列 ${#QUEUE[@]} 个(Small/School/Medium)。MAX_PARALLEL=$MAX_PARALLEL。停止: touch $STOP_FLAG"
 
 qi=0
 while :; do
