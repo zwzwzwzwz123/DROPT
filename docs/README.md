@@ -1,8 +1,9 @@
 # docs/ 索引 —— Guided-DiffFNO 期刊版
 
 > 用途：一眼看清 `docs/` 下每份文档的**角色**(活档/活引用/封存)，避免新会话读错文件、或误把封存档当现状。
-> 维护：末次更新 2026-07-24。**新会话从 🟢 START HERE 读起。**
-> 🔴 **当前主战场（07-24）**：OfficeLarge（23区）新建筑。首批 8000W 全套崩溃、根因=`max_power` 对大楼欠配、已修为 32000W 重跑（详见 stage5 §0/§3/§4 + memory `guided-difffno-officelarge-maxpower-rootcause`）。32000W 探针在跑，完训验证后铺开剩 14 run。
+> 维护：末次更新 2026-07-30。**新会话从 🟢 START HERE 读起。**
+> ℹ️ **OfficeLarge（第四栋）已放弃（07-25）**：尝试加 23 区大楼拆支柱2 楼型混杂,但 max_power 无全局解(实训全局标量都卡~48%)、唯一可行的逐区功率违反零侵入,故放弃。**支柱2 维持三栋(Small→Medium→School)**。教训见 stage5 §4 + memory `guided-difffno-officelarge-maxpower-rootcause`。
+> ℹ️ **大楼 modes 扫描 2-seed 判决已出（07-29）**：违规铁平(硬结果) + 能耗弱单调掉进噪声(边界 null)。结论=稳健性(modes=4 非调参)当支柱1 防御，**别写"截断=机制"**。s1 链在跑仅补表对称、不改结论。详见 stage5 §0 判决条 + memory `guided-difffno-modes-sweep-school`。**主线可转写作**。
 
 ---
 

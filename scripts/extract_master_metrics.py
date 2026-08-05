@@ -50,6 +50,11 @@ REG = {
    "officemedium_mlp_default_1m_s42_OfficeMedium_Hot_Dry_20260717_195822",
    "officemedium_mlp_default_1m_s0_OfficeMedium_Hot_Dry_20260717_235506",
    "officemedium_mlp_default_1m_s1_OfficeMedium_Hot_Dry_20260718_040544"],
+ # 【08-02 补录: guidance 解耦第三点。⚠️ s1 用真身 _195310, 不是 _095710(0-eval stale)】
+ ("OfficeMedium","NoGuide"): [
+   "officemedium_fno_noguide_default_1m_s42_OfficeMedium_Hot_Dry_20260720_111245",
+   "officemedium_fno_noguide_default_1m_s0_OfficeMedium_Hot_Dry_20260720_224820",
+   "officemedium_fno_noguide_default_1m_s1_OfficeMedium_Hot_Dry_20260721_195310"],
  ("SchoolPrimary","Full"): [
    "school_guided_1m_s42_SchoolPrimary_Hot_Dry_20260708_160354",
    "school_guided_1m_s0_SchoolPrimary_Hot_Dry_20260708_160618",
